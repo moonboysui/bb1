@@ -14,23 +14,27 @@ from telegram.ext import (
     filters,
     ContextTypes,
 )
-from database import get_db, init_db
-from utils import shorten_address, format_alert
-from sui import verify_payment
 
-# Set up logging
+# Placeholder imports (you'll need to implement these)
+from database import get_db, init_db  # Database management
+from utils import shorten_address, format_alert  # Utility functions
+from sui import verify_payment  # Payment verification
+
+# Set up logging for debugging and tracking
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# Environment variables
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-BOOST_RECEIVER = os.getenv("BOOST_RECEIVER", "0x0000000000000000000000000000000000000000000000000000000000000000")
+# Hardcoded bot token and boost receiver wallet
+BOT_TOKEN = "7551845767:AAF3UOQ4E0o33Bsd-0PBAlOLcifZU-1gT00"
+BOOST_RECEIVER = "0x7338ef163ee710923803cb0dd60b5b02cddc5fbafef417342e1bbf1fba20e702"
+
+# Load other environment variables with defaults
 TRENDING_CHANNEL = os.getenv("TRENDING_CHANNEL", "@moonbagstrending")
 PORT = int(os.getenv("PORT", 8080))
 
-# Conversation states
+# Define conversation states for group configuration
 CHOOSING, INPUT_TOKEN, INPUT_MIN_BUY, INPUT_EMOJI, INPUT_WEBSITE, INPUT_TELEGRAM, INPUT_TWITTER, INPUT_MEDIA = range(8)
 
 # --- Command Handlers ---
@@ -91,7 +95,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         return ConversationHandler.END
 
 async def boost(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Show boost pricing and instructions."""
+    """Display boost pricing and payment instructions."""
     pricing = (
         "Boost your token in the trending channel!\n"
         "Pricing:\n"
@@ -104,7 +108,7 @@ async def boost(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(pricing, parse_mode="Markdown")
 
 async def confirm_boost(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Verify a boost payment."""
+    """Verify a boost payment and schedule the boost."""
     if not context.args:
         await update.message.reply_text("Please provide the transaction hash: /confirm <hash>")
         return
@@ -136,8 +140,10 @@ async def confirm_boost(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         logger.error(f"Error in confirm_boost: {e}")
         await update.message.reply_text("Error verifying payment. Try again.")
 
+# --- Polling and Leaderboard Functions ---
+
 async def poll_buys(context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Check for new buys and post alerts."""
+    """Poll for new buy transactions and send alerts."""
     try:
         with get_db() as conn:
             cursor = conn.cursor()
@@ -174,7 +180,7 @@ async def poll_buys(context: ContextTypes.DEFAULT_TYPE) -> None:
         logger.error(f"Error in poll_buys: {e}")
 
 def fetch_recent_buys(token_address: str, min_usd: float) -> list:
-    """Get recent buys from Raiden X API."""
+    """Fetch recent buy transactions from Raiden X API."""
     try:
         encoded_address = token_address.replace("::", "%3A%3A")
         url = f"https://api-public.raidenx.io/sui/defi/txs/token?address={encoded_address}&txType=ALL&sortType=desc"
@@ -191,12 +197,6 @@ def fetch_recent_buys(token_address: str, min_usd: float) -> list:
                     "buyer": tx.get("sender", ""),
                     "symbol": tx.get("symbol", "Unknown"),
                     "website": tx.get("website", ""),
-                    "sui_amount": float(tx.get("sui_amount", 0)),
-                    "tokens_purchased": float(tx.get("tokens_purchased", 0)),
-                    "price": float(tx.get("price", 0)),
-                    "market_cap": float(tx.get("market_cap", 0)),
-                    "liquidity": float(tx.get("liquidity", 0)),
-                    "token_address": token_address,
                 })
         return buys
     except Exception as e:
@@ -204,7 +204,7 @@ def fetch_recent_buys(token_address: str, min_usd: float) -> list:
         return []
 
 async def generate_leaderboard(context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Post a leaderboard of top tokens."""
+    """Generate and post a leaderboard of top tokens."""
     try:
         cutoff = int(time.time()) - 24 * 3600
         with get_db() as conn:
@@ -242,7 +242,7 @@ async def generate_leaderboard(context: ContextTypes.DEFAULT_TYPE) -> None:
 # --- Configuration Handlers ---
 
 async def start_config(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Handle configuration menu selections."""
+    """Handle selections from the configuration menu."""
     query = update.callback_query
     await query.answer()
     data = query.data
@@ -260,16 +260,16 @@ async def start_config(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         await query.message.reply_text("Please enter the emoji for alerts.")
         return INPUT_EMOJI
     elif data == "set_website":
-        await query.message.reply_text("Please enter the website URL (or 'skip' to skip).")
+        await query.message.reply_text("Please enter the website URL (or type 'skip' to skip).")
         return INPUT_WEBSITE
     elif data == "set_telegram":
-        await query.message.reply_text("Please enter the Telegram link (or 'skip' to skip).")
+        await query.message.reply_text("Please enter the Telegram link (or type 'skip' to skip).")
         return INPUT_TELEGRAM
     elif data == "set_twitter":
-        await query.message.reply_text("Please enter the Twitter link (or 'skip' to skip).")
+        await query.message.reply_text("Please enter the Twitter link (or type 'skip' to skip).")
         return INPUT_TWITTER
     elif data == "set_media":
-        await query.message.reply_text("Please send a photo or GIF for alerts (or 'skip' to skip).")
+        await query.message.reply_text("Please send a photo or GIF for alerts (or type 'skip' to skip).")
         return INPUT_MEDIA
     elif data == "finish_setup":
         group_id = context.user_data.get("group_id")
@@ -387,15 +387,15 @@ async def receive_media(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     return CHOOSING
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Cancel the setup process."""
+    """Cancel the configuration process."""
     context.user_data.clear()
     await update.message.reply_text("Setup cancelled.")
     return ConversationHandler.END
 
 # --- Utility Functions ---
 
-def get_menu_keyboard() -> InlineKeyboardMarkup:
-    """Create the configuration menu."""
+def get_menu_keyboard():
+    """Generate the configuration menu keyboard."""
     keyboard = [
         [InlineKeyboardButton("Token Address", callback_data="set_token")],
         [InlineKeyboardButton("Minimum Buy", callback_data="set_min_buy")],
@@ -415,31 +415,25 @@ async def health_check(request):
     return web.Response(text="OK")
 
 async def run_server():
-    """Start an HTTP server for Render.com."""
-    try:
-        app = web.Application()
-        app.add_routes([web.get("/", health_check)])
-        runner = web.AppRunner(app)
-        await runner.setup()
-        site = web.TCPSite(runner, "0.0.0.0", PORT)
-        await site.start()
-        logger.info(f"Health check server running on port {PORT}")
-    except Exception as e:
-        logger.error(f"Failed to start server: {e}")
-        raise
+    """Run a simple HTTP server for Render.com."""
+    app = web.Application()
+    app.add_routes([web.get('/', health_check)])
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, '0.0.0.0', PORT)
+    await site.start()
+    logger.info(f"HTTP server started on port {PORT}")
 
 # --- Main Application ---
 
 async def main():
-    """Initialize and run the bot."""
-    # Initialize the database
+    """Initialize the database, set up the bot, and start polling."""
     init_db()
     logger.info("Database initialized")
 
-    # Set up the Telegram application
     application = Application.builder().token(BOT_TOKEN).build()
 
-    # Define the conversation handler
+    # Set up conversation handler with per_message=True to fix PTBUserWarning
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
         states={
@@ -453,7 +447,7 @@ async def main():
             INPUT_MEDIA: [MessageHandler(filters.PHOTO | filters.ANIMATION | filters.TEXT & ~filters.COMMAND, receive_media)],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
-        per_message=True,  # Fix PTBUserWarning
+        per_message=True,
     )
 
     # Add handlers
@@ -469,7 +463,7 @@ async def main():
     # Start the HTTP server as a background task
     asyncio.create_task(run_server())
 
-    # Run the bot's polling
+    # Start polling
     await application.run_polling(allowed_updates=["message", "callback_query"])
 
 if __name__ == "__main__":
