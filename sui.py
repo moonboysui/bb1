@@ -1,3 +1,3 @@
 def verify_payment(txn_hash, expected_amount, receiver):
-    """Placeholder: Always return True for testing."""
+    """Verify a payment (placeholder)."""
     return True
