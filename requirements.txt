@@ -1,3 +1,4 @@
 python-telegram-bot[job-queue]==21.0
 requests
-pysui  # If used by verify_payment
+pysui
+aiohttp
