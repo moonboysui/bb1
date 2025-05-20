@@ -1,49 +1,56 @@
 import sqlite3
-from contextlib import contextmanager
+import os
+import logging
 
-@contextmanager
-def get_db():
-    conn = sqlite3.connect('moonbags.db')
-    try:
-        yield conn
-        conn.commit()
-    finally:
-        conn.close()
+# Set up logging
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
+)
+logger = logging.getLogger(__name__)
 
 def init_db():
-    with get_db() as conn:
-        cursor = conn.cursor()
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS groups (
-                group_id INTEGER PRIMARY KEY,
-                token_address TEXT NOT NULL,
-                min_buy_usd REAL DEFAULT 5.0,
-                emoji TEXT DEFAULT '🔥',
-                website TEXT,
-                telegram_link TEXT,
-                twitter_link TEXT,
-                media_file_id TEXT
-            )
-        ''')
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS boosts (
-                token_address TEXT PRIMARY KEY,
-                expiration_timestamp INTEGER
-            )
-        ''')
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS price_snapshots (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                token_address TEXT,
-                timestamp INTEGER,
-                price REAL
-            )
-        ''')
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS buys (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                token_address TEXT,
-                timestamp INTEGER,
-                usd_value REAL
-            )
-        ''')
+    """Create the database tables."""
+    try:
+        with get_db() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS groups (
+                    group_id INTEGER PRIMARY KEY,
+                    token_address TEXT,
+                    min_buy_usd REAL,
+                    emoji TEXT,
+                    website TEXT,
+                    telegram_link TEXT,
+                    twitter_link TEXT,
+                    media_file_id TEXT
+                )
+            """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS buys (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    token_address TEXT,
+                    timestamp INTEGER,
+                    usd_value REAL
+                )
+            """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS boosts (
+                    token_address TEXT PRIMARY KEY,
+                    expiration_timestamp INTEGER
+                )
+            """)
+            conn.commit()
+            logger.info("Database initialized successfully")
+    except Exception as e:
+        logger.error(f"Error initializing database: {e}")
+
+def get_db():
+    """Connect to the database."""
+    try:
+        db_path = "/tmp/bot.db"  # Writable location on Render.com
+        conn = sqlite3.connect(db_path, check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        return conn
+    except Exception as e:
+        logger.error(f"Error connecting to database: {e}")
+        raise
