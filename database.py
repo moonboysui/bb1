@@ -2,12 +2,11 @@ import sqlite3
 import os
 import logging
 
-# Set up logging
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 def init_db():
-    """Initialize the SQLite database with required tables."""
+    """Create the database tables."""
     try:
         with get_db() as conn:
             cursor = conn.cursor()
@@ -43,9 +42,9 @@ def init_db():
         logger.error(f"Error initializing database: {e}")
 
 def get_db():
-    """Return a connection to the SQLite database."""
+    """Connect to the database."""
     try:
-        db_path = "/tmp/bot.db"  # Writable path for Render.com
+        db_path = "/tmp/bot.db"
         conn = sqlite3.connect(db_path, check_same_thread=False)
         conn.row_factory = sqlite3.Row
         return conn
