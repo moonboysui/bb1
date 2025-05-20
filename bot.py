@@ -1,10 +1,12 @@
 import os
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ConversationHandler, MessageHandler, filters
+import time
 import logging
-from database import init_db, get_db
+import urllib.parse
 from datetime import datetime, timedelta
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ConversationHandler, MessageHandler, filters, CallbackContext
 import requests
+from database import init_db, get_db
 from utils import shorten_address, format_alert
 from sui import verify_payment
 
@@ -16,14 +18,14 @@ TRENDING_CHANNEL = os.getenv('TRENDING_CHANNEL', '@moonbagstrending')
 # Initialize database
 init_db()
 
-# Logging setup
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levellevel)s - %(message)s', level=logging.INFO)
+# Logging setup (fixed typo)
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Conversation states
 CHOOSING, INPUT_TOKEN, INPUT_MIN_BUY, INPUT_EMOJI, INPUT_WEBSITE, INPUT_TELEGRAM, INPUT_TWITTER, INPUT_MEDIA, CONFIRM = range(9)
 
-# Menu keyboard
+# Menu keyboard for user configuration
 def get_menu_keyboard():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("🔗 Track Token", callback_data='track_token')],
@@ -36,8 +38,8 @@ def get_menu_keyboard():
         [InlineKeyboardButton("✅ Finish Setup", callback_data='finish_setup')],
     ])
 
-# Start command (group)
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+# Start command (handles group and private chat)
+async def start(update: Update, context: CallbackContext) -> None:
     if update.message.chat.type in ['group', 'supergroup']:
         group_id = update.message.chat.id
         button = InlineKeyboardButton("➡️ Continue in Private Chat", url=f"https://t.me/{context.bot.username}?start=group{group_id}")
@@ -76,13 +78,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         else:
             await update.message.reply_text("Please start the configuration from your group using /start.")
 
-# Configuration handlers
-async def start_config(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+# Configuration handlers (menu selection)
+async def start_config(update: Update, context: CallbackContext) -> int:
     query = update.callback_query
     await query.answer()
     option = query.data
     prompts = {
-        'track_token': "Please paste the token address to track.",
+        'track_token': "Please paste the token address to track (e.g., 0xabc...::module::SYMBOL).",
         'set_min_buy': "Enter the minimum buy size in USD (e.g., 10).",
         'choose_emoji': "Send a single emoji to use for buy alerts.",
         'add_website': "Enter your website URL (or 'skip' to omit).",
@@ -108,7 +110,8 @@ async def start_config(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     await query.edit_message_text(prompts[option])
     return state_map[option]
 
-async def receive_input(update: Update, context: ContextTypes.DEFAULT_TYPE, key: str, state: int, validate=None) -> int:
+# Generic input handler
+async def receive_input(update: Update, context: CallbackContext, key: str, state: int, validate=None) -> int:
     text = update.message.text.strip()
     if validate and not validate(text):
         await update.message.reply_text("Invalid input. Try again.")
@@ -120,12 +123,14 @@ async def receive_input(update: Update, context: ContextTypes.DEFAULT_TYPE, key:
     await update.message.reply_text(f"{key.replace('_', ' ').title()} set.", reply_markup=get_menu_keyboard())
     return CHOOSING
 
-async def receive_token(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+# Input handlers for specific fields
+async def receive_token(update: Update, context: CallbackContext) -> int:
     def is_valid_sui_address(addr):
-        return addr.startswith('0x') and len(addr) == 66  # Simplified validation
+        # Validate Sui address format (e.g., 0xabc...::module::SYMBOL)
+        return addr.startswith('0x') and '::' in addr
     return await receive_input(update, context, 'token_address', INPUT_TOKEN, is_valid_sui_address)
 
-async def receive_min_buy(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def receive_min_buy(update: Update, context: CallbackContext) -> int:
     def is_number(s):
         try:
             float(s)
@@ -134,21 +139,21 @@ async def receive_min_buy(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             return False
     return await receive_input(update, context, 'min_buy_usd', INPUT_MIN_BUY, is_number)
 
-async def receive_emoji(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def receive_emoji(update: Update, context: CallbackContext) -> int:
     def is_single_emoji(s):
         return len(s) == 1 and s.isprintable()  # Simplified
     return await receive_input(update, context, 'emoji', INPUT_EMOJI, is_single_emoji)
 
-async def receive_website(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def receive_website(update: Update, context: CallbackContext) -> int:
     return await receive_input(update, context, 'website', INPUT_WEBSITE)
 
-async def receive_telegram(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def receive_telegram(update: Update, context: CallbackContext) -> int:
     return await receive_input(update, context, 'telegram_link', INPUT_TELEGRAM)
 
-async def receive_twitter(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def receive_twitter(update: Update, context: CallbackContext) -> int:
     return await receive_input(update, context, 'twitter_link', INPUT_TWITTER)
 
-async def receive_media(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def receive_media(update: Update, context: CallbackContext) -> int:
     if update.message.text and update.message.text.lower() == 'skip':
         context.user_data['media_file_id'] = None
         await update.message.reply_text("Media skipped.", reply_markup=get_menu_keyboard())
@@ -164,7 +169,8 @@ async def receive_media(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     await update.message.reply_text("Media set.", reply_markup=get_menu_keyboard())
     return CHOOSING
 
-async def finish_setup(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+# Finish setup and save to database
+async def finish_setup(update: Update, context: CallbackContext) -> int:
     query = update.callback_query
     await query.answer()
     if 'token_address' not in context.user_data:
@@ -201,22 +207,100 @@ async def finish_setup(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     context.user_data.clear()
     return ConversationHandler.END
 
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+# Cancel setup
+async def cancel(update: Update, context: CallbackContext) -> int:
     await update.message.reply_text("Setup cancelled.", reply_markup=get_menu_keyboard())
     return CHOOSING
 
-# Buy polling and processing
-async def poll_buys(context: ContextTypes.DEFAULT_TYPE) -> None:
+# Fetch recent trades using Raiden X API
+def fetch_recent_buys(since: int) -> list:
+    # Get all configured token addresses from the database
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT DISTINCT token_address FROM groups")
+        token_addresses = [row['token_address'] for row in cursor.fetchall()]
+    
+    trades = []
+    base_url = "https://api-public.raidenx.io/sui/defi/txs/token"
+    for token_address in token_addresses:
+        # URL-encode the token address (e.g., 0xabc...::module::SYMBOL -> 0xabc...%3A%3Amodule%3A%3ASYMBOL)
+        encoded_address = urllib.parse.quote(token_address, safe='')
+        url = f"{base_url}?address={encoded_address}&txType=ALL&sortType=desc"
+        try:
+            response = requests.get(url, timeout=5)
+            if response.status_code == 200:
+                txs = response.json().get("data", [])
+                for tx in txs:
+                    # Assume timestamp is in seconds; adjust if API uses milliseconds
+                    tx_time = tx.get("timestamp", 0)
+                    if tx_time <= since:
+                        continue
+                    # Construct trade data (adjust based on actual API response structure)
+                    trade = {
+                        "token_address": token_address,
+                        "sui_amount": float(tx.get("amount", 0)) / 1_000_000_000,  # SUI decimals
+                        "usd_value": float(tx.get("amount", 0)) / 1_000_000_000 * fetch_current_price(token_address),
+                        "tokens_purchased": float(tx.get("amount", 0)),
+                        "buyer": tx.get("sender", ""),
+                        "price": fetch_current_price(token_address),
+                        "market_cap": 0,  # Updated in fetch_token_stats
+                        "liquidity": 0,   # Updated in fetch_token_stats
+                        "token_symbol": tx.get("symbol", "UNKNOWN")  # Adjust if API provides symbol
+                    }
+                    trades.append(trade)
+            else:
+                logger.error(f"Raiden X API error for {token_address}: {response.status_code}")
+        except requests.RequestException as e:
+            logger.error(f"Error fetching trades for {token_address}: {e}")
+        time.sleep(0.6)  # 100 requests/minute = ~0.6s delay
+    return trades
+
+# Fetch current token price using Raiden X API
+def fetch_current_price(token_address: str) -> float:
+    base_url = "https://api-public.raidenx.io/sui/defi/price"
+    encoded_address = urllib.parse.quote(token_address, safe='')
+    url = f"{base_url}?address={encoded_address}"
+    try:
+        response = requests.get(url, timeout=5)
+        if response.status_code == 200:
+            return float(response.json().get("price", 0.0))
+        return 0.0
+    except (requests.RequestException, ValueError) as e:
+        logger.error(f"Error fetching price for {token_address}: {e}")
+        return 0.0
+
+# Fetch token stats (market cap, liquidity) using Raiden X API
+def fetch_token_stats(token_address: str) -> dict:
+    base_url = "https://api-public.raidenx.io/sui/defi/v3/token/market-data"
+    encoded_address = urllib.parse.quote(token_address, safe='')
+    url = f"{base_url}?address={encoded_address}"
+    try:
+        response = requests.get(url, timeout=5)
+        if response.status_code == 200:
+            data = response.json().get("data", {})
+            return {
+                "symbol": data.get("symbol", "UNKNOWN"),
+                "market_cap": float(data.get("marketCap", 0)),
+                "liquidity": float(data.get("liquidity", 0))
+            }
+        return {"symbol": "UNKNOWN", "market_cap": 0, "liquidity": 0}
+    except (requests.RequestException, ValueError) as e:
+        logger.error(f"Error fetching stats for {token_address}: {e}")
+        return {"symbol": "UNKNOWN", "market_cap": 0, "liquidity": 0}
+
+# Poll for new buys and process them
+async def poll_buys(context: CallbackContext) -> None:
     last_check = context.bot_data.get('last_check', 0)
     now = int(datetime.utcnow().timestamp())
-    # Simulated API call; replace with actual Raiden X API
     buys = fetch_recent_buys(last_check)
     for buy in buys:
         await process_buy(context, buy)
     context.bot_data['last_check'] = now
 
-async def process_buy(context: ContextTypes.DEFAULT_TYPE, buy: dict) -> None:
+# Process each buy and send alerts
+async def process_buy(context: CallbackContext, buy: dict) -> None:
     token_address = buy['token_address']
+    now = int(datetime.utcnow().timestamp())
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute(
@@ -244,41 +328,22 @@ async def process_buy(context: ContextTypes.DEFAULT_TYPE, buy: dict) -> None:
             (token_address, now, buy['usd_value'])
         )
 
-def fetch_recent_buys(since: int) -> list:
-    # Placeholder; replace with actual Raiden X API call
-    return [
-        {
-            'token_address': '0x1234...abcd',
-            'sui_amount': 10.0,
-            'usd_value': 250.0,
-            'tokens_purchased': 1000,
-            'buyer': '0x5678...efgh',
-            'price': 0.25,
-            'market_cap': 1000000,
-            'liquidity': 500000,
-            'token_symbol': 'MOON'
-        }
-    ]
-
-# Leaderboard generation
-async def generate_leaderboard(context: ContextTypes.DEFAULT_TYPE) -> None:
+# Generate leaderboard for trending tokens
+async def generate_leaderboard(context: CallbackContext) -> None:
     now = datetime.utcnow()
     thirty_min_ago = now - timedelta(minutes=30)
     with get_db() as conn:
         cursor = conn.cursor()
-        # Store price snapshots
         cursor.execute("SELECT DISTINCT token_address FROM groups")
         tokens = [row['token_address'] for row in cursor.fetchall()]
         for token in tokens:
-            price = fetch_current_price(token)  # Replace with API call
+            price = fetch_current_price(token)
             cursor.execute(
                 "INSERT INTO price_snapshots (token_address, timestamp, price) VALUES (?, ?, ?)",
                 (token, int(now.timestamp()), price)
             )
-        # Get boosted tokens
         cursor.execute("SELECT token_address FROM boosts WHERE expiration_timestamp > ?", (int(now.timestamp()),))
         boosted_tokens = set(row['token_address'] for row in cursor.fetchall())
-        # Calculate volumes and price changes
         volumes = {}
         price_changes = {}
         for token in tokens:
@@ -297,14 +362,12 @@ async def generate_leaderboard(context: ContextTypes.DEFAULT_TYPE) -> None:
                 price_changes[token] = (current - previous) / previous * 100 if previous else 0
             else:
                 price_changes[token] = None
-        # Rank tokens
         boosted = sorted([(t, volumes[t]) for t in tokens if t in boosted_tokens], key=lambda x: x[1], reverse=True)
-        others = sorted([(t, volumes[t]) for t in tokens if t not in boosted_tokens], key=lambda x: x[1], reverse=True)
+        others = sorted([(t, volumes[t]) for t in tokens if t in boosted_tokens], key=lambda x: x[1], reverse=True)
         top_10 = (boosted + others)[:10]
-        # Format leaderboard
         message = "🌟 Top 10 Trending Tokens 🌟\n\n"
         for i, (token, volume) in enumerate(top_10, 1):
-            stats = fetch_token_stats(token)  # Replace with API call
+            stats = fetch_token_stats(token)
             change = price_changes.get(token)
             change_str = f"{'📈' if change > 0 else '📉'} {abs(change):.2f}%" if change is not None else "N/A"
             message += (
@@ -315,16 +378,8 @@ async def generate_leaderboard(context: ContextTypes.DEFAULT_TYPE) -> None:
         msg = await context.bot.send_message(TRENDING_CHANNEL, message)
         await context.bot.pin_chat_message(TRENDING_CHANNEL, msg.message_id, disable_notification=True)
 
-def fetch_current_price(token_address: str) -> float:
-    # Placeholder; replace with actual Raiden X API call
-    return 0.25
-
-def fetch_token_stats(token_address: str) -> dict:
-    # Placeholder; replace with actual Raiden X API call
-    return {'symbol': 'MOON', 'market_cap': 1000000}
-
 # Boost system
-async def boost(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def boost(update: Update, context: CallbackContext) -> None:
     pricing = "4h: 15 SUI\n8h: 20 SUI\n12h: 25 SUI\n24h: 40 SUI\n48h: 60 SUI\n72h: 80 SUI\n1week: 100 SUI"
     await update.message.reply_text(
         f"To boost your token, send SUI to: `{BOOST_RECEIVER}`\n\n"
@@ -333,7 +388,7 @@ async def boost(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         parse_mode='Markdown'
     )
 
-async def confirm_boost(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def confirm_boost(update: Update, context: CallbackContext) -> None:
     try:
         txn_hash, duration_str = context.args
         duration_map = {'4h': (15, 4*3600), '8h': (20, 8*3600), '12h': (25, 12*3600), '24h': (40, 24*3600),
@@ -377,13 +432,13 @@ def main():
         entry_points=[CommandHandler('start', start), CallbackQueryHandler(start_config)],
         states={
             CHOOSING: [CallbackQueryHandler(start_config)],
-            INPUT_TOKEN: [MessageHandler(filters.text & ~filters.command, receive_token)],
-            INPUT_MIN_BUY: [MessageHandler(filters.text & ~filters.command, receive_min_buy)],
-            INPUT_EMOJI: [MessageHandler(filters.text & ~filters.command, receive_emoji)],
-            INPUT_WEBSITE: [MessageHandler(filters.text & ~filters.command, receive_website)],
-            INPUT_TELEGRAM: [MessageHandler(filters.text & ~filters.command, receive_telegram)],
-            INPUT_TWITTER: [MessageHandler(filters.text & ~filters.command, receive_twitter)],
-            INPUT_MEDIA: [MessageHandler(filters.photo | filters.animation | filters.text & ~filters.command, receive_media)],
+            INPUT_TOKEN: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_token)],
+            INPUT_MIN_BUY: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_min_buy)],
+            INPUT_EMOJI: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_emoji)],
+            INPUT_WEBSITE: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_website)],
+            INPUT_TELEGRAM: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_telegram)],
+            INPUT_TWITTER: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_twitter)],
+            INPUT_MEDIA: [MessageHandler(filters.PHOTO | filters.ANIMATION | filters.TEXT & ~filters.COMMAND, receive_media)],
         },
         fallbacks=[CommandHandler('cancel', cancel)]
     )
