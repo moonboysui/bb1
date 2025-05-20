@@ -363,7 +363,7 @@ async def generate_leaderboard(context: CallbackContext) -> None:
             else:
                 price_changes[token] = None
         boosted = sorted([(t, volumes[t]) for t in tokens if t in boosted_tokens], key=lambda x: x[1], reverse=True)
-        others = sorted([(t, volumes[t]) for t in tokens if t in boosted_tokens], key=lambda x: x[1], reverse=True)
+        others = sorted([(t, volumes[t]) for t in tokens if t not in boosted_tokens], key=lambda x: x[1], reverse=True)
         top_10 = (boosted + others)[:10]
         message = "🌟 Top 10 Trending Tokens 🌟\n\n"
         for i, (token, volume) in enumerate(top_10, 1):
@@ -440,7 +440,8 @@ def main():
             INPUT_TWITTER: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_twitter)],
             INPUT_MEDIA: [MessageHandler(filters.PHOTO | filters.ANIMATION | filters.TEXT & ~filters.COMMAND, receive_media)],
         },
-        fallbacks=[CommandHandler('cancel', cancel)]
+        fallbacks=[CommandHandler('cancel', cancel)],
+        per_message=True  # Fix per_message warning
     )
 
     application.add_handler(conv_handler)
