@@ -1,6 +1,6 @@
 import os
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ConversationHandler, MessageHandler, Filters, ContextTypes
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ConversationHandler, MessageHandler, filters
 import logging
 from database import init_db, get_db
 from datetime import datetime, timedelta
@@ -377,13 +377,13 @@ def main():
         entry_points=[CommandHandler('start', start), CallbackQueryHandler(start_config)],
         states={
             CHOOSING: [CallbackQueryHandler(start_config)],
-            INPUT_TOKEN: [MessageHandler(Filters.text & ~Filters.command, receive_token)],
-            INPUT_MIN_BUY: [MessageHandler(Filters.text & ~Filters.command, receive_min_buy)],
-            INPUT_EMOJI: [MessageHandler(Filters.text & ~Filters.command, receive_emoji)],
-            INPUT_WEBSITE: [MessageHandler(Filters.text & ~Filters.command, receive_website)],
-            INPUT_TELEGRAM: [MessageHandler(Filters.text & ~Filters.command, receive_telegram)],
-            INPUT_TWITTER: [MessageHandler(Filters.text & ~Filters.command, receive_twitter)],
-            INPUT_MEDIA: [MessageHandler(Filters.photo | Filters.animation | Filters.text & ~Filters.command, receive_media)],
+            INPUT_TOKEN: [MessageHandler(filters.text & ~filters.command, receive_token)],
+            INPUT_MIN_BUY: [MessageHandler(filters.text & ~filters.command, receive_min_buy)],
+            INPUT_EMOJI: [MessageHandler(filters.text & ~filters.command, receive_emoji)],
+            INPUT_WEBSITE: [MessageHandler(filters.text & ~filters.command, receive_website)],
+            INPUT_TELEGRAM: [MessageHandler(filters.text & ~filters.command, receive_telegram)],
+            INPUT_TWITTER: [MessageHandler(filters.text & ~filters.command, receive_twitter)],
+            INPUT_MEDIA: [MessageHandler(filters.photo | filters.animation | filters.text & ~filters.command, receive_media)],
         },
         fallbacks=[CommandHandler('cancel', cancel)]
     )
