@@ -8,3 +8,5 @@ class Config:
     PORT = int(os.getenv("PORT", 8080))
     DEX_SCREENER_API = "https://api.dexscreener.com/latest/dex/tokens/"
     SUI_RPC = "https://fullnode.mainnet.sui.io/"
+    SUI_EXPLORER = "https://suiscan.xyz/mainnet/tx"
+  
