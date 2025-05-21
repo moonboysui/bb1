@@ -1,23 +1,48 @@
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+import math
 
-def shorten_address(address: str) -> str:
-    return f"{address[:6]}...{address[-4:]}" if len(address) > 10 else address
+def shorten_address(address):
+    """Shorten a blockchain address for display."""
+    if not address or len(address) < 10:
+        return address
+    return f"{address[:6]}...{address[-4:]}"
 
-def format_alert(tx: dict, emoji: str, token_address: str, media_id: str = None):
-    num_emojis = min(int(tx['valueUSD'] // 5, 20)
-    emojis = emoji * num_emojis
-    explorer_link = f"{SUI_EXPLORER}{tx['txHash']}"
+def format_alert(buy_data, token_info, group_settings):
+    """Format an alert message for a group."""
+    # Extract needed values
+    token_symbol = token_info.get('symbol', 'TOKEN')
+    token_price = token_info.get('price', 0)
+    market_cap = token_info.get('market_cap', 0)
+    liquidity = token_info.get('liquidity', 0)
     
-    message = (
-        f"{emojis}\n"
-        f"💰 {tx['amountSUI']} SUI (${tx['valueUSD']:.2f})\n"
-        f"🧠 Buyer: {shorten_address(tx['buyer']} [View TX]({explorer_link})\n"
-        f"📈 Price: ${tx['price']:.4f} | MC: ${tx['marketCap']:,.0f}"
+    # Format emojis based on buy size
+    emoji = group_settings.get('emoji', '🔥')
+    emoji_count = max(1, min(20, int(buy_data['usd_value'] / 5)))
+    emojis = emoji * emoji_count
+    
+    # Format amounts
+    usd_value_str = f"${buy_data['usd_value']:.2f}"
+    token_amount_str = f"{buy_data['amount']:.4f}"
+    
+    # Format market data
+    if market_cap > 1000000:
+        market_cap_str = f"${market_cap/1000000:.2f}M"
+    else:
+        market_cap_str = f"${market_cap/1000:.2f}K"
+    
+    if liquidity > 1000000:
+        liquidity_str = f"${liquidity/1000000:.2f}M"
+    else:
+        liquidity_str = f"${liquidity/1000:.2f}K"
+    
+    # Format alert text
+    alert_text = (
+        f"{emojis} NEW BUY {emojis}\n\n"
+        f"💰 {token_amount_str} ${token_symbol} (≈{usd_value_str})\n"
+        f"🧠 Buyer: [{shorten_address(buy_data['buyer_address'])}](https://suivision.xyz/txblock/{buy_data['tx_hash']})\n\n"
+        f"📊 ${token_symbol} Stats:\n"
+        f"💲 Price: ${token_price:.8f}\n"
+        f"💹 Market Cap: {market_cap_str}\n"
+        f"💧 Liquidity: {liquidity_str}"
     )
     
-    buttons = [
-        [InlineKeyboardButton("🛒 Buy Token", url=f"https://moonbags.finance/buy?token={token_address}")],
-        [InlineKeyboardButton("🌍 Trending Channel", url=f"https://t.me/{TRENDING_CHANNEL}")]
-    ]
-    
-    return message, InlineKeyboardMarkup(buttons), media_id
+    return alert_text
