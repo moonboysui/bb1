@@ -1,74 +1,58 @@
 import sqlite3
-import os
 import logging
-from config import Config
+from typing import Dict, Any
 
 logger = logging.getLogger(__name__)
 
-def ensure_db():
-    db_dir = os.path.dirname(Config.DATABASE_PATH)
-    if db_dir and not os.path.exists(db_dir):
-        os.makedirs(db_dir)
-
 def init_db():
-    ensure_db()
-    with sqlite3.connect(Config.DATABASE_PATH) as conn:
-        cursor = conn.cursor()
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS groups (
-                group_id INTEGER PRIMARY KEY,
-                token_address TEXT NOT NULL,
-                token_symbol TEXT,
-                min_buy REAL DEFAULT 0,
-                emoji TEXT DEFAULT '🔥',
-                emoji_step REAL DEFAULT 5,
-                website TEXT,
-                telegram TEXT,
-                twitter TEXT,
-                chart_link TEXT,
-                media_id TEXT
-            )
-        """)
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS boosts (
-                token_address TEXT PRIMARY KEY,
-                expiration INTEGER,
-                boost_level INTEGER DEFAULT 1
-            )
-        """)
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS buys (
-                tx_hash TEXT PRIMARY KEY,
-                token_address TEXT,
-                buyer TEXT,
-                amount REAL,
-                usd_value REAL,
-                timestamp INTEGER
-            )
-        """)
+    """Initialize database tables"""
+    with get_db() as conn:
+        conn.execute('''CREATE TABLE IF NOT EXISTS groups (
+                        group_id INTEGER PRIMARY KEY,
+                        token_address TEXT NOT NULL,
+                        min_buy REAL NOT NULL,
+                        emoji TEXT NOT NULL,
+                        emoji_step REAL NOT NULL,
+                        media_id TEXT,
+                        website TEXT,
+                        telegram TEXT,
+                        twitter TEXT,
+                        chart_link TEXT)''')
+        
+        conn.execute('''CREATE TABLE IF NOT EXISTS boosts (
+                        token_address TEXT PRIMARY KEY,
+                        expires INTEGER NOT NULL,
+                        active INTEGER DEFAULT 1)''')
+        
         conn.commit()
 
 def get_db():
-    ensure_db()
-    return sqlite3.connect(Config.DATABASE_PATH)
+    """Get database connection"""
+    return sqlite3.connect('bot.db', check_same_thread=False)
 
-def save_group(group_id, data):
+def save_group_settings(group_id: int, settings: Dict[str, Any]):
+    """Save group configuration to database"""
     with get_db() as conn:
-        conn.execute("""
-            INSERT OR REPLACE INTO groups VALUES (
-                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-            )
-        """, (
-            group_id,
-            data['token_address'],
-            data.get('symbol'),
-            data.get('min_buy', 0),
-            data.get('emoji', '🔥'),
-            data.get('emoji_step', 5),
-            data.get('website'),
-            data.get('telegram'),
-            data.get('twitter'),
-            data.get('chart_link'),
-            data.get('media_id')
-        ))
+        conn.execute('''INSERT OR REPLACE INTO groups VALUES (
+                        :id, :token_address, :min_buy, :emoji, 
+                        :emoji_step, :media_id, :website, 
+                        :telegram, :twitter, :chart_link)''',
+                    {
+                        'id': group_id,
+                        'token_address': settings.get('token_address'),
+                        'min_buy': settings.get('min_buy', 0),
+                        'emoji': settings.get('emoji', '🔥'),
+                        'emoji_step': settings.get('emoji_step', 5),
+                        'media_id': settings.get('media_id'),
+                        'website': settings.get('website'),
+                        'telegram': settings.get('telegram'),
+                        'twitter': settings.get('twitter'),
+                        'chart_link': settings.get('chart_link')
+                    })
+        conn.commit()
+
+def clear_fake_symbols():
+    """Clean up invalid token symbols"""
+    with get_db() as conn:
+        conn.execute("DELETE FROM groups WHERE token_symbol = 'TOKEN'")
         conn.commit()
