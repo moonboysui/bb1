@@ -16,8 +16,9 @@ def shorten_address(address: str, chars: int = 6) -> str:
 
 def format_alert(buy_data: dict, token_info: dict, group_settings: dict) -> str:
     """Generate formatted buy alert message"""
-    # Fix: Added third closing parenthesis here
-    emoji_count = max(1, min(20, int(buy_data['usd_value'] / group_settings.get('emoji_step', 5)))
+    # CORRECTED LINE WITH PROPER PARENTHESIS
+    emoji_count = max(1, min(20, int(buy_data['usd_value'] / group_settings.get('emoji_step', 5))))
+    
     emojis = group_settings.get('emoji', '🔥') * emoji_count
     
     return (
