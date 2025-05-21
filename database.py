@@ -1,32 +1,83 @@
-# database.py (updated)
+import os
+import sqlite3
+import logging
+
+# Get logger
+logger = logging.getLogger(__name__)
+
+# Use environment variable or default to data directory
+DB_PATH = os.getenv("DATABASE_PATH", "data/moonbags.db")
+
+def ensure_db_directory():
+    db_dir = os.path.dirname(DB_PATH)
+    if db_dir and not os.path.exists(db_dir):
+        os.makedirs(db_dir)
+        logger.info(f"Created directory {db_dir} for database")
 
 def init_db():
-    """Initialize database tables"""
-    with get_db() as conn:
-        # Updated groups table schema
-        conn.execute('''CREATE TABLE IF NOT EXISTS groups (
-                        group_id INTEGER PRIMARY KEY,
-                        token_address TEXT NOT NULL,
-                        token_symbol TEXT NOT NULL,  # Added this column
-                        min_buy REAL NOT NULL,
-                        emoji TEXT NOT NULL,
-                        emoji_step REAL NOT NULL,
-                        media_id TEXT,
-                        website TEXT,
-                        telegram TEXT,
-                        twitter TEXT,
-                        chart_link TEXT)''')
+    ensure_db_directory()
+    with sqlite3.connect(DB_PATH) as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS groups (
+                group_id INTEGER PRIMARY KEY,
+                token_address TEXT NOT NULL,
+                token_symbol TEXT DEFAULT 'TOKEN',
+                min_buy_usd REAL DEFAULT 0,
+                emoji TEXT DEFAULT '🔥',
+                buy_step REAL DEFAULT 1,  -- Added for emoji calculation
+                website TEXT,
+                telegram_link TEXT,
+                twitter_link TEXT,
+                media_file_id TEXT
+            )
+        """)
         
-        conn.execute('''CREATE TABLE IF NOT EXISTS boosts (
-                        token_address TEXT PRIMARY KEY,
-                        expires INTEGER NOT NULL,
-                        active INTEGER DEFAULT 1)''')
+        # Add missing columns if they don't exist (for updates)
+        cursor.execute("PRAGMA table_info(groups)")
+        columns = [col[1] for col in cursor.fetchall()]
         
+        if "token_symbol" not in columns:
+            cursor.execute("ALTER TABLE groups ADD COLUMN token_symbol TEXT DEFAULT 'TOKEN'")
+            logger.info("Added missing column: token_symbol to groups table")
+            
+        if "buy_step" not in columns:
+            cursor.execute("ALTER TABLE groups ADD COLUMN buy_step REAL DEFAULT 1")
+            logger.info("Added missing column: buy_step to groups table")
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS buys (
+                transaction_id TEXT PRIMARY KEY,
+                token_address TEXT NOT NULL,
+                buyer_address TEXT NOT NULL,
+                amount REAL NOT NULL,
+                usd_value REAL NOT NULL,
+                timestamp INTEGER NOT NULL
+            )
+        """)
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS boosts (
+                token_address TEXT PRIMARY KEY,
+                expiration_timestamp INTEGER NOT NULL
+            )
+        """)
         conn.commit()
+        logger.info("Database initialized successfully")
+
+def get_db():
+    ensure_db_directory()
+    return sqlite3.connect(DB_PATH)
 
 def clear_fake_symbols():
-    """Clean up invalid token symbols"""
-    with get_db() as conn:
-        # Changed to use token_address instead of non-existent token_symbol
-        conn.execute("DELETE FROM groups WHERE token_address LIKE '%fake%'")
+    with sqlite3.connect(DB_PATH) as conn:
+        cursor = conn.cursor()
+        # This function might need to be re-evaluated if you're pulling real symbols
+        # For now, it cleans up placeholders for a fresh start.
+        fake_list = ['MEME', 'MOON', 'APE', 'SUI', 'DOGE', 'PEPE']
+        placeholders = ', '.join('?' for _ in fake_list)
+        query = f"UPDATE groups SET token_symbol = 'TOKEN' WHERE token_symbol IN ({placeholders})"
+        cursor.execute(query, fake_list)
+        affected = cursor.rowcount
         conn.commit()
+        logger.info(f"Cleared {affected} fake token symbol entries in groups table")
