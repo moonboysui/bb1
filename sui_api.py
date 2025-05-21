@@ -24,7 +24,7 @@ def _make_request(url, params=None):
     return None
 
 
-async def fetch_token_info(token_address):
+def fetch_token_info(token_address):
     """Fetch real token info from Birdeye."""
     url = f"{BIRDEYE_BASE_URL}/token/price"
     params = {"address": token_address, "chain": "sui"}
@@ -40,7 +40,7 @@ async def fetch_token_info(token_address):
             "price": float(info.get("value", 0)),
             "market_cap": float(info.get("marketCap", 0)),
             "liquidity": float(info.get("liquidity", 0)),
-            "price_change_30m": float(info.get("change24h", 0)),  # Placeholder if no 30m field
+            "price_change_30m": float(info.get("change24h", 0)),
             "price_change_24h": float(info.get("change24h", 0)),
         }
 
@@ -48,12 +48,12 @@ async def fetch_token_info(token_address):
     return {"symbol": "TOKEN", "price": 0, "market_cap": 0, "liquidity": 0}
 
 
-async def get_token_symbol(token_address):
-    info = await fetch_token_info(token_address)
+def get_token_symbol(token_address):
+    info = fetch_token_info(token_address)
     return info.get("symbol", "TOKEN")
 
 
-async def fetch_recent_buys(token_address, since_timestamp):
+def fetch_recent_buys(token_address, since_timestamp):
     """Fetch recent buys from Birdeye"""
     try:
         url = f"{BIRDEYE_BASE_URL}/token/trades"
@@ -65,7 +65,6 @@ async def fetch_recent_buys(token_address, since_timestamp):
         }
         data = _make_request(url, params)
         results = []
-        now = int(time.time())
 
         if data and data.get("data"):
             for tx in data["data"]:
@@ -85,7 +84,7 @@ async def fetch_recent_buys(token_address, since_timestamp):
         return []
 
 
-async def verify_payment(tx_hash, expected_amount, receiver_address):
-    """Still using old logic. Adjust if Birdeye supports direct transaction lookup."""
+def verify_payment(tx_hash, expected_amount, receiver_address):
+    """Placeholder: Always returns True. Replace with real check if needed."""
     logger.warning("verify_payment is still using placeholder logic")
-    return True  # Always approve for now (or integrate a future transaction checker)
+    return True
