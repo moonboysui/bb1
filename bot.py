@@ -8,7 +8,7 @@ import math
 import aiohttp.web
 
 from telegram import (
-    Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
+    Update, InlineKeyboardButton, InlineKeyboardMarkup
 )
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler, MessageHandler,
@@ -32,8 +32,8 @@ PORT = int(os.getenv("PORT", 8080))
 # Conversation states
 (
     CHOOSING, INPUT_TOKEN, INPUT_MIN_BUY, INPUT_EMOJI, INPUT_BUYSTEP,
-    INPUT_WEBSITE, INPUT_TELEGRAM, INPUT_TWITTER, INPUT_MEDIA, BOOST_CONFIRM
-) = range(10)
+    INPUT_WEBSITE, INPUT_TELEGRAM, INPUT_TWITTER, INPUT_MEDIA, BOOST_CONFIRM, BOOST_WAIT
+) = range(11)
 
 BOOST_OPTIONS = [
     ("4h",  4 * 3600,   15),
@@ -104,7 +104,7 @@ def save_group_settings(group_id, settings):
         logger.error(f"Error saving group settings: {e}")
         return False
 
-# --- Conversation Handlers for Setup (same as in previous code, but compacted for clarity) ---
+# --- Conversation Handlers for Setup ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.chat.type in ['group', 'supergroup']:
         member = await context.bot.get_chat_member(update.effective_chat.id, update.effective_user.id)
@@ -359,23 +359,17 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("✅ Setup cancelled.")
     return ConversationHandler.END
 
-# --- Boost Handlers (can be copy-pasted from earlier for brevity, or implemented fully as above) ---
-
 # --- LIVE BUY STREAM HANDLER ---
-
-async def handle_live_buy(buy, group_data):
-    # group_data: (group_id, min_buy_usd, buystep, emoji, website, telegram_link, twitter_link, media_file_id)
+async def handle_live_buy(buy, group_data, application):
     group_id, min_buy_usd, buystep, emoji, website, telegram_link, twitter_link, media_file_id = group_data
     token_info = fetch_token_info(buy['token_out'])
     group_settings = {'emoji': emoji, 'buystep': buystep}
-    # Fetch up-to-date USD value if needed
     price = token_info.get("price") or 0
     usd_value = float(buy['amount']) * price
     if usd_value < min_buy_usd:
         return
     buy['usd_value'] = usd_value
     alert_text = format_alert(buy, token_info, group_settings)
-    # Buttons
     keyboard = [
         [InlineKeyboardButton(f"BUY ${token_info.get('symbol', 'TOKEN')}", url=f"https://moonbags.io/tokens/{buy['token_out']}")],
         [InlineKeyboardButton("🌕 Moonbags Trending", url="https://t.me/moonbagstrending")]
@@ -390,10 +384,9 @@ async def handle_live_buy(buy, group_data):
     if link_buttons:
         keyboard.append(link_buttons)
     reply_markup = InlineKeyboardMarkup(keyboard)
-    app = Application.builder().token(BOT_TOKEN).build()
     try:
         if media_file_id:
-            await app.bot.send_photo(
+            await application.bot.send_photo(
                 chat_id=group_id,
                 photo=media_file_id,
                 caption=alert_text,
@@ -401,7 +394,7 @@ async def handle_live_buy(buy, group_data):
                 reply_markup=reply_markup
             )
         else:
-            await app.bot.send_message(
+            await application.bot.send_message(
                 chat_id=group_id,
                 text=alert_text,
                 parse_mode="Markdown",
@@ -409,8 +402,6 @@ async def handle_live_buy(buy, group_data):
             )
     except Exception as e:
         logger.error(f"Failed to send alert to group {group_id}: {e}")
-
-# --- Trending Leaderboard and other jobs can be copied from earlier ---
 
 def main():
     init_db()
@@ -420,11 +411,34 @@ def main():
     server_thread.start()
 
     application = Application.builder().token(BOT_TOKEN).build()
-    # -- Add all handlers here, as before (setup flow, boost, etc) --
 
-    # Start buy stream
+    conv_handler = ConversationHandler(
+        entry_points=[
+            CommandHandler("start", start),
+            MessageHandler(filters.TEXT & ~filters.COMMAND, start_private)
+        ],
+        states={
+            CHOOSING: [CallbackQueryHandler(menu_handler)],
+            INPUT_TOKEN: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_token)],
+            INPUT_MIN_BUY: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_min_buy)],
+            INPUT_EMOJI: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_emoji)],
+            INPUT_BUYSTEP: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_buystep)],
+            INPUT_WEBSITE: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_website)],
+            INPUT_TELEGRAM: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_telegram)],
+            INPUT_TWITTER: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_twitter)],
+            INPUT_MEDIA: [
+                MessageHandler(filters.PHOTO | filters.ANIMATION, receive_media),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, receive_media)
+            ]
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+    )
+
+    application.add_handler(conv_handler)
+
+    # Start buy stream in background, pass application so it can send messages
     loop = asyncio.get_event_loop()
-    loop.create_task(start_buy_stream(handle_live_buy))
+    loop.create_task(start_buy_stream(lambda buy, group: handle_live_buy(buy, group, application)))
 
     application.run_polling()
 
