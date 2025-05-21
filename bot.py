@@ -17,7 +17,11 @@ from telegram.ext import (
     filters,
     ContextTypes,
 )
-from database import init_db, get_db
+from database import init_db, get_db, clear_fake_symbols
+
+init_db()
+clear_fake_symbols()
+
 from utils import shorten_address, format_alert
 from sui_api import verify_payment, fetch_recent_buys, fetch_token_info, get_token_symbol
 
