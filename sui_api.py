@@ -21,7 +21,6 @@ def _make_request(token_address):
     return None
 
 def fetch_token_info(token_address):
-    """Fetch token info using Moonbags API"""
     data = _make_request(token_address)
     if not data:
         logger.warning(f"[Moonbags] Failed to fetch token info for {token_address}")
@@ -52,9 +51,11 @@ def get_token_symbol(token_address):
     return info.get("symbol", "TOKEN")
 
 def fetch_recent_buys(token_address, since_timestamp):
-    """Returns a fake 'buy' alert if lastTrade is recent"""
     info = fetch_token_info(token_address)
+    logger.info(f"[Buy Check] Token: {token_address}")
+    logger.info(f"[Buy Check] LastTrade: {info['last_trade']} | Since: {since_timestamp * 1000}")
     if info["last_trade"] > since_timestamp * 1000:
+        logger.info(f"[Buy Check] ✅ New trade detected!")
         return [{
             "tx_hash": "0x_simulated_tx",
             "buyer_address": "0x_simulated_wallet",
@@ -62,6 +63,7 @@ def fetch_recent_buys(token_address, since_timestamp):
             "usd_value": info["price"],
             "timestamp": int(info["last_trade"] / 1000)
         }]
+    logger.info(f"[Buy Check] ❌ No new trade.")
     return []
 
 def verify_payment(tx_hash, expected_amount, receiver_address):
