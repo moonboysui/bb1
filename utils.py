@@ -1,5 +1,3 @@
-import math
-
 def shorten_address(address):
     if not address or len(address) < 10:
         return address
@@ -21,7 +19,7 @@ def format_alert(buy_data, token_info, group_settings):
     alert_text = (
         f"{emojis} NEW BUY {emojis}\n\n"
         f"💰 {token_amount_str} ${token_symbol} (≈{usd_value_str})\n"
-        f"🧠 Buyer: [{shorten_address(buy_data['buyer_address'])}](https://suivision.xyz/address/{buy_data['buyer_address']}) | "
+        f"👤 Buyer: [{shorten_address(buy_data['buyer_address'])}](https://suivision.xyz/address/{buy_data['buyer_address']}) | "
         f"[Txn](https://suivision.xyz/txblock/{buy_data['tx_hash']})\n\n"
         f"📊 ${token_symbol} Stats:\n"
         f"💲 Price: ${token_price:.8f}\n"
