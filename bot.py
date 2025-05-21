@@ -16,7 +16,8 @@ from telegram.ext import (
     ContextTypes,
 )
 import sqlite3
-from pysui import SuiClient, SuiConfig  # For Sui blockchain interaction
+from pysui.sui.sui_clients.async_client import AsyncClient  # Correct import for async Sui client
+from pysui.sui.sui_config import SuiConfig  # Correct import for Sui configuration
 
 # Logging setup
 logging.basicConfig(
@@ -25,16 +26,16 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Configuration
-BOT_TOKEN = os.getenv("BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")  # Replace with your token
+BOT_TOKEN = os.getenv("BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")  # Replace with your Telegram bot token
 BOOST_RECEIVER = os.getenv("BOOST_RECEIVER", "0x7338ef163ee710923803cb0dd60b5b02cddc5fbafef417342e1bbf1fba20e702")
 TRENDING_CHANNEL = os.getenv("TRENDING_CHANNEL", "@yourtrendingchannel")
 PORT = int(os.getenv("PORT", 8080))
-SUI_RPC_URL = "https://fullnode.mainnet.sui.io"  # Sui mainnet RPC
+SUI_RPC_URL = "https://fullnode.mainnet.sui.io"  # Sui mainnet RPC URL
 
-# Conversation states
+# Conversation states for setup
 CHOOSING, INPUT_TOKEN, INPUT_MIN_BUY, INPUT_EMOJI, INPUT_WEBSITE, INPUT_TWITTER, INPUT_TELEGRAM, INPUT_MEDIA = range(8)
 
-# Boost options with your specified durations and costs
+# Boost options with duration (in seconds) and cost (in SUI)
 BOOST_OPTIONS = {
     "1_hour": {"duration": 3600, "cost": 1.0},
     "6_hours": {"duration": 21600, "cost": 5.0},
@@ -45,7 +46,7 @@ BOOST_OPTIONS = {
 # --- Database Functions ---
 
 def init_db():
-    """Initialize the SQLite database."""
+    """Initialize the SQLite database with required tables."""
     with sqlite3.connect("bot_settings.db") as conn:
         cursor = conn.cursor()
         cursor.execute("""
@@ -79,7 +80,7 @@ def init_db():
     logger.info("Database initialized")
 
 def get_db():
-    """Get a database connection."""
+    """Get a connection to the SQLite database."""
     return sqlite3.connect("bot_settings.db")
 
 def save_group_settings(group_id, settings):
@@ -95,7 +96,7 @@ def save_group_settings(group_id, settings):
     logger.info(f"Settings saved for group {group_id}")
 
 def log_buy(token_address, timestamp, usd_value, buyer):
-    """Log a buy transaction."""
+    """Log a buy transaction to the database."""
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute("""
@@ -105,7 +106,7 @@ def log_buy(token_address, timestamp, usd_value, buyer):
         conn.commit()
 
 def save_boost(token_address, expiration):
-    """Save a boost expiration."""
+    """Save a boost expiration timestamp to the database."""
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute("""
@@ -121,7 +122,7 @@ async def health_check(request):
     return web.Response(text="OK")
 
 async def run_server():
-    """Run the HTTP server for Render.com."""
+    """Run an HTTP server to keep Render.com happy."""
     app = web.Application()
     app.add_routes([web.get('/', health_check)])
     runner = web.AppRunner(app)
@@ -138,7 +139,7 @@ def start_http_server():
 # --- Utility Functions ---
 
 def shorten_address(address):
-    """Shorten a blockchain address."""
+    """Shorten a blockchain address for display."""
     if len(address) < 10:
         return address
     return f"{address[:6]}...{address[-4:]}"
@@ -164,16 +165,21 @@ def format_alert(buy, settings):
 async def verify_payment(txn_hash, expected_amount):
     """Verify a Sui payment transaction using pysui."""
     try:
-        sui_client = SuiClient(config=SuiConfig.from_config_file(None, SUI_RPC_URL))
+        # Initialize SuiConfig with RPC URL
+        config = SuiConfig(rpc_url=SUI_RPC_URL)
+        # Initialize AsyncClient for async operations
+        sui_client = AsyncClient(config)
+        # Fetch transaction details asynchronously
         txn_response = await sui_client.get_transaction_block(txn_hash)
         if not txn_response:
             logger.error(f"No transaction found for hash: {txn_hash}")
             return False
-        balance_changes = txn_response.effects.balance_changes
+        # Check balance changes (Note: Adjust parsing based on actual response structure)
+        balance_changes = getattr(txn_response.effects, 'balance_changes', [])
         for change in balance_changes:
-            owner = change.owner.get("AddressOwner")
+            owner = change.owner.get("AddressOwner") if hasattr(change.owner, 'get') else str(change.owner)
             amount = int(change.amount)
-            if owner == BOOST_RECEIVER and amount >= expected_amount * 10**9:  # SUI uses 9 decimals
+            if owner == BOOST_RECEIVER and amount >= expected_amount * 10**9:  # Convert SUI to MIST (10^9)
                 logger.info(f"Payment verified: {txn_hash}")
                 return True
         logger.info(f"Payment conditions not met for: {txn_hash}")
@@ -185,9 +191,10 @@ async def verify_payment(txn_hash, expected_amount):
 # --- Live Buy Tracking with Sui RPC ---
 
 def fetch_recent_buys(token_address, min_usd, last_timestamp):
-    """Fetch recent buys from the Sui blockchain using RPC."""
+    """Fetch recent buy transactions from Sui RPC (placeholder implementation)."""
     try:
-        url = f"{SUI_RPC_URL}/transactions"
+        # Note: This is a simplified placeholder. Replace with actual Sui RPC query logic.
+        url = f"{SUI_RPC_URL}/transactions"  # Adjust endpoint as per Sui RPC docs
         params = {
             "filter": {"token": token_address},
             "after_timestamp": last_timestamp
@@ -196,16 +203,18 @@ def fetch_recent_buys(token_address, min_usd, last_timestamp):
         response.raise_for_status()
         transactions = response.json().get("transactions", [])
         
-        # Placeholder USD conversion (replace with real price feed)
+        # Placeholder USD conversion (replace with real price feed, e.g., CoinGecko)
         buys = []
         for tx in transactions:
-            usd_value = float(tx.get("amount", 0)) * 0.1  # Placeholder
-            if usd_value >= min_usd and tx.get("timestamp", 0) > last_timestamp:
+            amount = float(tx.get("amount", 0))  # Placeholder amount in SUI
+            usd_value = amount * 0.1  # Placeholder: 1 SUI = $0.1 (replace with real price)
+            timestamp = tx.get("timestamp", int(time.time()))
+            if usd_value >= min_usd and timestamp > last_timestamp:
                 buys.append({
                     "usd_value": usd_value,
                     "buyer": tx.get("sender", "unknown"),
                     "token_address": token_address,
-                    "timestamp": tx.get("timestamp")
+                    "timestamp": timestamp
                 })
         return buys
     except Exception as e:
@@ -215,7 +224,7 @@ def fetch_recent_buys(token_address, min_usd, last_timestamp):
 # --- Bot Handlers ---
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Handle the /start command."""
+    """Handle the /start command to begin configuration."""
     await update.message.reply_text(
         "Welcome! Configure the bot with these options:",
         reply_markup=get_menu_keyboard()
@@ -253,15 +262,15 @@ async def start_config(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         required = ["token_address", "min_buy_usd", "emoji"]
         if all(k in settings for k in required):
             save_group_settings(update.effective_chat.id, settings)
-            await query.message.reply_text("Setup complete!")
+            await query.message.reply_text("Setup complete! Use /boost to promote your token.")
             return ConversationHandler.END
         else:
-            await query.message.reply_text("Please set token, min buy, and emoji first.")
+            await query.message.reply_text("Please set token address, minimum buy, and emoji first.")
             return CHOOSING
     return CHOOSING
 
 async def receive_token(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Save the token address."""
+    """Save the token address input."""
     user_input = update.message.text.strip()
     if not user_input.startswith("0x") or len(user_input) < 10:
         await update.message.reply_text("Please enter a valid token address starting with '0x'.")
@@ -271,7 +280,7 @@ async def receive_token(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     return CHOOSING
 
 async def receive_min_buy(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Save the minimum buy amount."""
+    """Save the minimum buy amount input."""
     try:
         min_buy = float(update.message.text.strip())
         if min_buy <= 0:
@@ -284,7 +293,7 @@ async def receive_min_buy(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return INPUT_MIN_BUY
 
 async def receive_emoji(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Save the emoji."""
+    """Save the emoji input."""
     user_input = update.message.text.strip()
     if len(user_input) > 10:
         await update.message.reply_text("Please enter a single emoji or short sequence.")
@@ -294,7 +303,7 @@ async def receive_emoji(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     return CHOOSING
 
 async def receive_website(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Save the website URL or skip."""
+    """Save the website URL or skip it."""
     text = update.message.text.strip()
     if text.lower() != "skip":
         context.user_data.setdefault("settings", {})["website"] = text
@@ -304,7 +313,7 @@ async def receive_website(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     return CHOOSING
 
 async def receive_twitter(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Save the Twitter handle or skip."""
+    """Save the Twitter handle or skip it."""
     text = update.message.text.strip()
     if text.lower() != "skip":
         context.user_data.setdefault("settings", {})["twitter"] = text
@@ -314,7 +323,7 @@ async def receive_twitter(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     return CHOOSING
 
 async def receive_telegram(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Save the Telegram link or skip."""
+    """Save the Telegram link or skip it."""
     text = update.message.text.strip()
     if text.lower() != "skip":
         context.user_data.setdefault("settings", {})["telegram"] = text
@@ -324,7 +333,7 @@ async def receive_telegram(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     return CHOOSING
 
 async def receive_media(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Save the media file ID or skip."""
+    """Save the media file ID (photo/GIF) or skip it."""
     if update.message.text and update.message.text.lower() == "skip":
         context.user_data.setdefault("settings", {})["media_file_id"] = None
         await update.message.reply_text("Media skipped. What's next?", reply_markup=get_menu_keyboard())
@@ -369,7 +378,7 @@ async def boost(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 async def boost_duration_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle boost duration selection."""
+    """Handle boost duration selection from inline buttons."""
     query = update.callback_query
     await query.answer()
     duration_key = query.data.split("_")[1] + "_hours"
@@ -390,7 +399,7 @@ async def boost_duration_selected(update: Update, context: ContextTypes.DEFAULT_
     )
 
 async def confirm_boost(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Confirm a boost payment."""
+    """Confirm a boost payment by verifying the transaction."""
     if not context.args or len(context.args) != 1:
         await update.message.reply_text("Usage: /confirm <transaction_hash>")
         return
@@ -409,10 +418,10 @@ async def confirm_boost(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         save_boost(token_address, expiration)
         await update.message.reply_text(f"Boost confirmed for {shorten_address(token_address)} for {duration // 3600} hours!")
     else:
-        await update.message.reply_text("Payment verification failed. Ensure you sent the correct amount.")
+        await update.message.reply_text("Payment verification failed. Ensure you sent the correct amount to the right address.")
 
 async def poll_buys(context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Poll for buy transactions."""
+    """Poll for recent buy transactions and send alerts."""
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM groups")
@@ -430,6 +439,7 @@ async def poll_buys(context: ContextTypes.DEFAULT_TYPE) -> None:
         }
         buys = fetch_recent_buys(settings["token_address"], settings["min_buy_usd"], last_timestamp)
         for buy in buys:
+            log_buy(buy["token_address"], buy["timestamp"], buy["usd_value"], buy["buyer"])
             message = format_alert(buy, settings)
             if settings["media_file_id"]:
                 await context.bot.send_photo(group[0], settings["media_file_id"], caption=message)
@@ -442,7 +452,7 @@ async def poll_buys(context: ContextTypes.DEFAULT_TYPE) -> None:
 # --- Utility Functions ---
 
 def get_menu_keyboard():
-    """Generate the configuration menu keyboard."""
+    """Generate the configuration menu inline keyboard."""
     keyboard = [
         [InlineKeyboardButton("Set Token Address", callback_data="set_token")],
         [InlineKeyboardButton("Set Minimum Buy", callback_data="set_min_buy")],
@@ -458,17 +468,17 @@ def get_menu_keyboard():
 # --- Main Function ---
 
 def main():
-    """Set up and run the bot."""
+    """Set up and run the Telegram bot."""
     init_db()
     logger.info("Database initialized")
 
-    # Start HTTP server for Render.com
+    # Start HTTP server in a separate thread for Render.com
     threading.Thread(target=start_http_server, daemon=True).start()
 
     # Initialize bot application
     application = Application.builder().token(BOT_TOKEN).build()
 
-    # Set up conversation handler
+    # Set up conversation handler for configuration
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
         states={
@@ -485,13 +495,13 @@ def main():
         per_message=False
     )
 
-    # Add handlers
+    # Add handlers to the application
     application.add_handler(conv_handler)
     application.add_handler(CommandHandler("boost", boost))
     application.add_handler(CommandHandler("confirm", confirm_boost))
     application.add_handler(CallbackQueryHandler(boost_duration_selected, pattern="^boost_"))
 
-    # Schedule jobs
+    # Schedule the buy polling job every 60 seconds
     application.job_queue.run_repeating(poll_buys, interval=60, first=0)
 
     logger.info("Starting bot polling...")
