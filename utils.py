@@ -1,48 +1,31 @@
 import math
+from config import Config
 
-def shorten_address(address):
-    """Shorten a blockchain address for display."""
-    if not address or len(address) < 10:
-        return address
-    return f"{address[:6]}...{address[-4:]}"
+def shorten_address(address, length=6):
+    return f"{address[:length]}...{address[-length:]}" if address else ""
 
 def format_alert(buy_data, token_info, group_settings):
-    """Format an alert message for a group."""
-    # Extract needed values
-    token_symbol = token_info.get('symbol', 'TOKEN')
-    token_price = token_info.get('price', 0)
-    market_cap = token_info.get('market_cap', 0)
-    liquidity = token_info.get('liquidity', 0)
+    emoji_count = max(1, min(20, int(buy_data['usd_value'] / group_settings.get('emoji_step', 5)))
+    emojis = group_settings.get('emoji', '🔥') * emoji_count
     
-    # Format emojis based on buy size
-    emoji = group_settings.get('emoji', '🔥')
-    emoji_count = max(1, min(20, int(buy_data['usd_value'] / 5)))
-    emojis = emoji * emoji_count
-    
-    # Format amounts
-    usd_value_str = f"${buy_data['usd_value']:.2f}"
-    token_amount_str = f"{buy_data['amount']:.4f}"
-    
-    # Format market data
-    if market_cap > 1000000:
-        market_cap_str = f"${market_cap/1000000:.2f}M"
-    else:
-        market_cap_str = f"${market_cap/1000:.2f}K"
-    
-    if liquidity > 1000000:
-        liquidity_str = f"${liquidity/1000000:.2f}M"
-    else:
-        liquidity_str = f"${liquidity/1000:.2f}K"
-    
-    # Format alert text
-    alert_text = (
-        f"{emojis} NEW BUY {emojis}\n\n"
-        f"💰 {token_amount_str} ${token_symbol} (≈{usd_value_str})\n"
-        f"🧠 Buyer: [{shorten_address(buy_data['buyer_address'])}](https://suivision.xyz/txblock/{buy_data['tx_hash']})\n\n"
-        f"📊 ${token_symbol} Stats:\n"
-        f"💲 Price: ${token_price:.8f}\n"
-        f"💹 Market Cap: {market_cap_str}\n"
-        f"💧 Liquidity: {liquidity_str}"
+    return (
+        f"{emojis} {token_info['symbol']} Buy! {emojis}\n\n"
+        f"💰 Size ${buy_data['usd_value']:.2f} | {buy_data['amount']:.2f SUI\n"
+        f"👤 Buyer [{shorten_address(buy_data['buyer'])}]({Config.SUI_EXPLORER}/tx/{buy_data['tx_hash']}) | "
+        f"[Txn]({Config.SUI_EXPLORER}/tx/{buy_data['tx_hash']})\n"
+        f"🔼 MCap ${token_info['market_cap']/1000:.2f}K\n"
+        f"📊 TVL/Liq ${token_info['liquidity']/1000:.2f}K\n"
+        f"📈 Price ${token_info['price']:.6f}\n"
+        f"💧 SUI Price: ${token_info['sui_price']:.2f}\n\n"
+        f"{format_links(group_settings)}"
+        f"\n\n[Chart]({group_settings.get('chart_link', '')}) | "
+        f"[Vol Bot]({Config.VOL_BOT_LINK}) | "
+        f"[Trending](https://t.me/{Config.TRENDING_CHANNEL})"
     )
-    
-    return alert_text
+
+def format_links(settings):
+    links = []
+    if settings.get('website'): links.append(f"[Website]({settings['website']})")
+    if settings.get('telegram_link'): links.append(f"[Telegram]({settings['telegram_link']})")
+    if settings.get('twitter_link'): links.append(f"[X]({settings['twitter_link']})")
+    return " | ".join(links) + "\n" if links else ""
