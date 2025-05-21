@@ -2,5 +2,4 @@ python-telegram-bot[job-queue]==20.3
 aiohttp>=3.8.1
 requests>=2.31.0
 python-dotenv>=0.20.0
-sqlite-web>=0.4.2
 apscheduler>=3.10.1
