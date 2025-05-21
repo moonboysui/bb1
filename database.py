@@ -52,14 +52,3 @@ def init_db():
 def get_db():
     ensure_db_directory()
     return sqlite3.connect(DB_PATH)
-
-def clear_fake_symbols():
-    with sqlite3.connect(DB_PATH) as conn:
-        cursor = conn.cursor()
-        fake_list = ['MEME', 'MOON', 'APE', 'SUI', 'DOGE', 'PEPE']
-        placeholders = ', '.join('?' for _ in fake_list)
-        query = f"UPDATE groups SET token_symbol = 'TOKEN' WHERE token_symbol IN ({placeholders})"
-        cursor.execute(query, fake_list)
-        affected = cursor.rowcount
-        conn.commit()
-        logger.info(f"Cleared {affected} fake token symbol entries in groups table")
