@@ -8,21 +8,21 @@ from database import get_db
 logger = logging.getLogger(__name__)
 
 BLOCKEDEN_WWS_URL = os.getenv("BLOCKEDEN_WWS_URL")
-# Example event type for Cetus DEX. Adjust if you want more DEXs.
+# You can add more DEX event types here!
 DEX_EVENTS = [
-    {"MoveEventType": "0x23a79c4eb5e60d19a1674058a77c4ba0486265c705f5c7f1f1233cfb2e25e1c6::pool::SwapEvent"},
-    # Add other DEXes here as needed
+    {"MoveEventType": "0x23a79c4eb5e60d19a1674058a77c4ba0486265c705f5c7f1f1233cfb2e25e1c6::pool::SwapEvent"}, # Cetus
+    # {"MoveEventType": "0x...::amm::SwapEvent"}, # Add more if needed
 ]
 
 def parse_swap_event(event):
-    # This parser is for Cetus. If using other DEXs, add parsing logic for them.
     data = event.get('parsedJson', {})
     return {
         "token_in": data.get("coin_in_address"),
         "token_out": data.get("coin_out_address"),
         "buyer_address": data.get("owner"),
         "amount": float(data.get("amount_out", 0)),
-        "tx_hash": event.get("id", ""),  # Might need to adjust if not present
+        "token_amt_str": f"{float(data.get('amount_token_out', 0)):.2f}" if 'amount_token_out' in data else "",
+        "tx_hash": event.get("id", ""),
         "timestamp": int(event.get("timestampMs", 0)) // 1000,
     }
 
@@ -30,7 +30,6 @@ async def start_buy_stream(alert_callback):
     while True:
         try:
             async with websockets.connect(BLOCKEDEN_WWS_URL) as ws:
-                # Subscribe to all relevant DEX events
                 for event_filter in DEX_EVENTS:
                     sub_msg = {
                         "jsonrpc": "2.0",
@@ -49,7 +48,6 @@ async def start_buy_stream(alert_callback):
                     buy = parse_swap_event(event)
                     if not buy or not buy.get("token_out"):
                         continue
-                    # Find all groups tracking this token_out
                     with get_db() as conn:
                         cursor = conn.cursor()
                         cursor.execute(
@@ -60,7 +58,6 @@ async def start_buy_stream(alert_callback):
                     if not groups:
                         continue
                     for group_data in groups:
-                        # Save to buys DB
                         with get_db() as conn:
                             cursor = conn.cursor()
                             cursor.execute(
@@ -70,7 +67,7 @@ async def start_buy_stream(alert_callback):
                                     buy['token_out'],
                                     buy['buyer_address'],
                                     buy['amount'],
-                                    0,  # USD value is calculated in alert logic
+                                    0,
                                     buy['timestamp'],
                                 )
                             )
@@ -78,4 +75,4 @@ async def start_buy_stream(alert_callback):
                         await alert_callback(buy, group_data)
         except Exception as e:
             logger.error(f"BlockEden WWS error: {e}")
-            await asyncio.sleep(5)  # Wait and reconnect on error
+            await asyncio.sleep(5)
