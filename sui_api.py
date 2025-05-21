@@ -3,18 +3,20 @@ import requests
 import logging
 import time
 
-# Get logger
+# Setup logger
 logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
 
-# Replace this with your actual API key from Birdeye
+# Get API key and set headers
 BIRDEYE_API_KEY = os.getenv("BIRDEYE_API_KEY")
 BIRDEYE_BASE_URL = "https://public-api.birdeye.so/public"
-
 HEADERS = {"X-API-KEY": BIRDEYE_API_KEY}
 
 def normalize_token_address(token_type: str) -> str:
-    """Extracts contract address from full Sui token type string."""
-    return token_type.split("::")[0]
+    """Extracts base address from full Sui token type string."""
+    base = token_type.split("::")[0]
+    logger.info(f"Normalized token address: {base}")
+    return base
 
 def _make_request(url, params=None):
     try:
@@ -27,7 +29,6 @@ def _make_request(url, params=None):
     return None
 
 def fetch_token_info(token_address):
-    """Fetch real token info from Birdeye."""
     normalized_address = normalize_token_address(token_address)
     url = f"{BIRDEYE_BASE_URL}/token/price"
     params = {"address": normalized_address, "chain": "sui"}
@@ -55,7 +56,6 @@ def get_token_symbol(token_address):
     return info.get("symbol", "TOKEN")
 
 def fetch_recent_buys(token_address, since_timestamp):
-    """Fetch recent buys from Birdeye"""
     try:
         normalized_address = normalize_token_address(token_address)
         url = f"{BIRDEYE_BASE_URL}/token/trades"
@@ -86,6 +86,12 @@ def fetch_recent_buys(token_address, since_timestamp):
         return []
 
 def verify_payment(tx_hash, expected_amount, receiver_address):
-    """Placeholder: Always returns True. Replace with real check if needed."""
     logger.warning("verify_payment is still using placeholder logic")
     return True
+
+# TEST FUNCTION to verify API works in isolation
+if __name__ == "__main__":
+    test_address = "0xf22da9a24ad027cccb5f2d496cbe91de953d363513db08a3a734d361c7c17503::LOFI::LOFI"
+    print("Testing fetch_token_info...")
+    info = fetch_token_info(test_address)
+    print(info)
