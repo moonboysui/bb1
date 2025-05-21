@@ -12,6 +12,9 @@ BIRDEYE_BASE_URL = "https://public-api.birdeye.so/public"
 
 HEADERS = {"X-API-KEY": BIRDEYE_API_KEY}
 
+def normalize_token_address(token_type: str) -> str:
+    """Extracts contract address from full Sui token type string."""
+    return token_type.split("::")[0]
 
 def _make_request(url, params=None):
     try:
@@ -23,11 +26,11 @@ def _make_request(url, params=None):
         logger.error(f"API request failed: {e}")
     return None
 
-
 def fetch_token_info(token_address):
     """Fetch real token info from Birdeye."""
+    normalized_address = normalize_token_address(token_address)
     url = f"{BIRDEYE_BASE_URL}/token/price"
-    params = {"address": token_address, "chain": "sui"}
+    params = {"address": normalized_address, "chain": "sui"}
     data = _make_request(url, params)
 
     if data and data.get("data"):
@@ -47,18 +50,17 @@ def fetch_token_info(token_address):
     logger.warning(f"[Birdeye] Failed to fetch token info for {token_address}")
     return {"symbol": "TOKEN", "price": 0, "market_cap": 0, "liquidity": 0}
 
-
 def get_token_symbol(token_address):
     info = fetch_token_info(token_address)
     return info.get("symbol", "TOKEN")
 
-
 def fetch_recent_buys(token_address, since_timestamp):
     """Fetch recent buys from Birdeye"""
     try:
+        normalized_address = normalize_token_address(token_address)
         url = f"{BIRDEYE_BASE_URL}/token/trades"
         params = {
-            "address": token_address,
+            "address": normalized_address,
             "chain": "sui",
             "type": "buy",
             "limit": 10
@@ -82,7 +84,6 @@ def fetch_recent_buys(token_address, since_timestamp):
     except Exception as e:
         logger.error(f"Failed to fetch buys: {e}")
         return []
-
 
 def verify_payment(tx_hash, expected_amount, receiver_address):
     """Placeholder: Always returns True. Replace with real check if needed."""
