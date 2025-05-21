@@ -2,10 +2,8 @@ import os
 import sqlite3
 import logging
 
-# Get logger
 logger = logging.getLogger(__name__)
 
-# Use environment variable or default to data directory
 DB_PATH = os.getenv("DATABASE_PATH", "data/moonbags.db")
 
 def ensure_db_directory():
@@ -24,27 +22,14 @@ def init_db():
                 token_address TEXT NOT NULL,
                 token_symbol TEXT DEFAULT 'TOKEN',
                 min_buy_usd REAL DEFAULT 0,
+                buystep REAL DEFAULT 5,
                 emoji TEXT DEFAULT '🔥',
-                buy_step REAL DEFAULT 1,  -- Added for emoji calculation
                 website TEXT,
                 telegram_link TEXT,
                 twitter_link TEXT,
                 media_file_id TEXT
             )
         """)
-        
-        # Add missing columns if they don't exist (for updates)
-        cursor.execute("PRAGMA table_info(groups)")
-        columns = [col[1] for col in cursor.fetchall()]
-        
-        if "token_symbol" not in columns:
-            cursor.execute("ALTER TABLE groups ADD COLUMN token_symbol TEXT DEFAULT 'TOKEN'")
-            logger.info("Added missing column: token_symbol to groups table")
-            
-        if "buy_step" not in columns:
-            cursor.execute("ALTER TABLE groups ADD COLUMN buy_step REAL DEFAULT 1")
-            logger.info("Added missing column: buy_step to groups table")
-
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS buys (
                 transaction_id TEXT PRIMARY KEY,
@@ -55,7 +40,6 @@ def init_db():
                 timestamp INTEGER NOT NULL
             )
         """)
-
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS boosts (
                 token_address TEXT PRIMARY KEY,
@@ -72,8 +56,6 @@ def get_db():
 def clear_fake_symbols():
     with sqlite3.connect(DB_PATH) as conn:
         cursor = conn.cursor()
-        # This function might need to be re-evaluated if you're pulling real symbols
-        # For now, it cleans up placeholders for a fresh start.
         fake_list = ['MEME', 'MOON', 'APE', 'SUI', 'DOGE', 'PEPE']
         placeholders = ', '.join('?' for _ in fake_list)
         query = f"UPDATE groups SET token_symbol = 'TOKEN' WHERE token_symbol IN ({placeholders})"
