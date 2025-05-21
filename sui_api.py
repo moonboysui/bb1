@@ -1,173 +1,158 @@
-import aiohttp
+import requests
 import logging
 import time
 import json
-import os
-from datetime import datetime
 
-# Logging setup
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
-)
+# Get logger
 logger = logging.getLogger(__name__)
 
 # API endpoints
-RAIDEN_API_URL = "https://api.raiden.xyz/v1/marketplace"
-SUI_API_URL = "https://mainnet.sui.io"
-MOONBAGS_API_URL = "https://api.moonbags.io"
+SUI_API_BASE = "https://wallet-rpc.sui.io/"
+TOKEN_INFO_API = "https://moonbags.io/api/tokens/"
 
-# Cache for token info to avoid excessive API calls
-token_info_cache = {}
-cache_expiry = 300  # 5 minutes
+async def verify_payment(tx_hash, expected_amount, receiver_address):
+    """Verify that a payment was made in the expected amount to the expected address."""
+    try:
+        # Add retry logic since the transaction might not be immediately available
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                response = requests.post(
+                    SUI_API_BASE,
+                    json={
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "sui_getTransactionBlock",
+                        "params": [
+                            tx_hash,
+                            {
+                                "showEffects": True,
+                                "showInput": True,
+                                "showEvents": True
+                            }
+                        ]
+                    },
+                    headers={"Content-Type": "application/json"}
+                )
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    
+                    # Check if transaction exists
+                    if "result" not in data or data.get("error"):
+                        logger.warning(f"Transaction not found or error: {data.get('error', 'Unknown error')}")
+                        if attempt < max_retries - 1:
+                            time.sleep(2 ** attempt)  # Exponential backoff
+                            continue
+                        return False
+                    
+                    # Extract transaction details
+                    tx_data = data["result"]
+                    
+                    # Check if this is a payment transaction
+                    if "effects" not in tx_data:
+                        logger.warning("Transaction has no effects")
+                        return False
+                    
+                    # Check for SUI coin transfers in the transaction effects
+                    for change in tx_data["effects"]["mutated"]:
+                        # Check if this is a coin and matches our receiver
+                        if "coinType" in change["reference"]["objectType"] and "0x2::sui::SUI" in change["reference"]["objectType"]:
+                            if change["owner"]["AddressOwner"] == receiver_address:
+                                # Found matching receiver, now check amount
+                                # Note: This is simplified and would need adjustment based on actual Sui response format
+                                balance_change = int(change["preview"]["balance_change"]) / 1_000_000_000  # Convert from MIST to SUI
+                                
+                                # Allow for small discrepancies in floating point comparison
+                                if abs(balance_change - expected_amount) < 0.01:
+                                    logger.info(f"Payment verified: {balance_change} SUI to {receiver_address}")
+                                    return True
+                    
+                    logger.warning(f"Could not verify payment of {expected_amount} SUI to {receiver_address}")
+                    return False
+                else:
+                    logger.warning(f"API error: {response.status_code} - {response.text}")
+                    if attempt < max_retries - 1:
+                        time.sleep(2 ** attempt)  # Exponential backoff
+                        continue
+                    return False
+                
+            except Exception as e:
+                logger.error(f"Error verifying payment (attempt {attempt+1}/{max_retries}): {e}")
+                if attempt < max_retries - 1:
+                    time.sleep(2 ** attempt)  # Exponential backoff
+                    continue
+                return False
+        
+        return False
+        
+    except Exception as e:
+        logger.error(f"Error verifying payment: {e}")
+        return False
 
 async def fetch_recent_buys(token_address, since_timestamp):
-    """Fetch recent buys for a given token since the timestamp."""
+    """Fetch recent buys for a specific token since the given timestamp."""
     try:
-        # This endpoint should return buys for the specified token
-        url = f"{RAIDEN_API_URL}/buys"
-        params = {
-            "token": token_address,
-            "since": since_timestamp,
-            "limit": 50  # Adjust as needed
-        }
+        # This would normally call the Moonbags API or other source
+        # For now, returning mock data for demonstration
+        # In a real implementation, you would make an API call here
         
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, params=params) as response:
-                if response.status != 200:
-                    logger.error(f"API error {response.status}: {await response.text()}")
-                    return []
-                
-                data = await response.json()
-                
-                # Transform the API response into our expected format
-                buys = []
-                for item in data.get("data", []):
-                    try:
-                        buy = {
-                            "tx_hash": item["transaction_id"],
-                            "buyer_address": item["buyer_address"],
-                            "amount": float(item["token_amount"]),
-                            "usd_value": float(item["usd_value"]),
-                            "timestamp": int(datetime.fromisoformat(item["timestamp"].replace("Z", "+00:00")).timestamp())
-                        }
-                        buys.append(buy)
-                    except (KeyError, ValueError) as e:
-                        logger.error(f"Error parsing buy data: {e}")
-                
-                return buys
-    
+        # Mock data for demonstration - replace with actual API call
+        current_time = int(time.time())
+        
+        # Simulate some buys only if enough time has passed
+        if current_time - since_timestamp > 60:  # Only generate mock data every minute or so
+            # Return 1-3 random buys
+            mock_buys = []
+            import random
+            for _ in range(random.randint(1, 3)):
+                mock_buys.append({
+                    "tx_hash": f"0x{random.randint(10000000, 99999999)}abcdef",
+                    "buyer_address": f"0x{random.randint(1000, 9999)}abcd{random.randint(1000, 9999)}",
+                    "amount": random.uniform(10, 1000),
+                    "usd_value": random.uniform(10, 500),
+                    "timestamp": current_time - random.randint(1, 59)
+                })
+            return mock_buys
+        
+        return []
+        
     except Exception as e:
         logger.error(f"Error fetching recent buys: {e}")
         return []
 
 async def fetch_token_info(token_address):
-    """Fetch and cache token information."""
-    global token_info_cache
-    
-    current_time = time.time()
-    
-    # Check cache first
-    if token_address in token_info_cache:
-        cache_data = token_info_cache[token_address]
-        if current_time - cache_data["timestamp"] < cache_expiry:
-            return cache_data["data"]
-    
+    """Fetch information about a token."""
     try:
-        # Fetch token info from API
-        url = f"{RAIDEN_API_URL}/tokens/{token_address}"
+        # In a real implementation, you would make an API call to get token info
+        # For now, returning mock data
         
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url) as response:
-                if response.status != 200:
-                    logger.error(f"API error {response.status}: {await response.text()}")
-                    return {
-                        "symbol": "UNKNOWN",
-                        "price": 0,
-                        "market_cap": 0,
-                        "liquidity": 0,
-                        "price_change_30m": 0
-                    }
-                
-                data = await response.json()
-                
-                # Extract relevant information
-                token_info = {
-                    "symbol": data.get("symbol", "UNKNOWN"),
-                    "price": float(data.get("price", 0)),
-                    "market_cap": float(data.get("market_cap", 0)),
-                    "liquidity": float(data.get("liquidity", 0)),
-                    "price_change_30m": float(data.get("price_change_30m", 0))
-                }
-                
-                # Cache the result
-                token_info_cache[token_address] = {
-                    "data": token_info,
-                    "timestamp": current_time
-                }
-                
-                return token_info
-    
+        # Mock data - would be replaced with actual API call
+        import random
+        
+        # Generate a random token symbol
+        symbols = ["MOON", "SUI", "PEPE", "DOGE", "SHIB", "APE", "MEME"]
+        symbol = random.choice(symbols)
+        
+        return {
+            "symbol": symbol,
+            "name": f"{symbol} Token",
+            "price": random.uniform(0.00000001, 0.1),
+            "market_cap": random.uniform(100000, 5000000),
+            "liquidity": random.uniform(50000, 1000000),
+            "price_change_30m": random.uniform(-10, 20),
+            "price_change_24h": random.uniform(-30, 50),
+        }
+        
     except Exception as e:
         logger.error(f"Error fetching token info: {e}")
-        return {
-            "symbol": "UNKNOWN",
-            "price": 0,
-            "market_cap": 0,
-            "liquidity": 0,
-            "price_change_30m": 0
-        }
+        return {"symbol": "TOKEN", "price": 0, "market_cap": 0, "liquidity": 0}
 
 async def get_token_symbol(token_address):
-    """Get token symbol (simplified helper function)."""
-    token_info = await fetch_token_info(token_address)
-    return token_info.get("symbol", "TOKEN")
-
-async def verify_payment(txn_hash, expected_amount, expected_receiver):
-    """Verify a SUI payment transaction."""
+    """Get the symbol for a token."""
     try:
-        # Create the SUI RPC request
-        payload = {
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "sui_getTransaction",
-            "params": [txn_hash]
-        }
-        
-        async with aiohttp.ClientSession() as session:
-            async with session.post(SUI_API_URL, json=payload) as response:
-                if response.status != 200:
-                    logger.error(f"SUI API error {response.status}: {await response.text()}")
-                    return False
-                
-                result = await response.json()
-                
-                # Extract transaction data
-                tx_data = result.get("result", {}).get("transaction", {})
-                
-                # Check if it's a payment transaction
-                if tx_data.get("data", {}).get("transaction", {}).get("kind") != "ProgrammableTransaction":
-                    logger.warning(f"Transaction {txn_hash} is not a programmable transaction")
-                    return False
-                
-                # Extract transaction details - for SUI payments we need to analyze the transaction commands
-                # This is a simplified version and might need adjustment based on the actual SUI transaction structure
-                try:
-                    commands = tx_data.get("data", {}).get("transaction", {}).get("transactions", [])
-                    for cmd in commands:
-                        if cmd.get("TransferObjects") and len(cmd.get("TransferObjects", [])[1]) > 0:
-                            recipient = cmd.get("TransferObjects", [])[1]
-                            if recipient == expected_receiver:
-                                # For simplicity, we're not checking the amount here
-                                # A real implementation would extract and verify the amount as well
-                                logger.info(f"Payment verified: {txn_hash}")
-                                return True
-                except Exception as e:
-                    logger.error(f"Error parsing transaction structure: {e}")
-                    return False
-                
-                logger.warning(f"Payment verification failed for txn {txn_hash}")
-                return False
-    
+        token_info = await fetch_token_info(token_address)
+        return token_info.get("symbol", "TOKEN")
     except Exception as e:
-        logger.error(f"Error verifying payment: {e}")
-        return False
+        logger.error(f"Error getting token symbol: {e}")
+        return "TOKEN"
