@@ -1,6 +1,3 @@
-# ✅ This file replaces `sui_api.py` with real API logic using Birdeye for Sui token tracking.
-# 📌 Assumes you sign up and get a free Birdeye API key.
-
 import os
 import requests
 import logging
@@ -35,8 +32,10 @@ async def fetch_token_info(token_address):
 
     if data and data.get("data"):
         info = data["data"]
+        symbol = info.get("symbol", "TOKEN")
+        logger.info(f"[Birdeye] Token: {symbol} | Address: {token_address}")
         return {
-            "symbol": info.get("symbol", "TOKEN"),
+            "symbol": symbol,
             "name": info.get("name", "Unknown Token"),
             "price": float(info.get("value", 0)),
             "market_cap": float(info.get("marketCap", 0)),
@@ -45,6 +44,7 @@ async def fetch_token_info(token_address):
             "price_change_24h": float(info.get("change24h", 0)),
         }
 
+    logger.warning(f"[Birdeye] Failed to fetch token info for {token_address}")
     return {"symbol": "TOKEN", "price": 0, "market_cap": 0, "liquidity": 0}
 
 
