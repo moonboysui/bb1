@@ -1,22 +1,18 @@
-import os
 import sqlite3
+import os
 import logging
+from config import Config
 
-# Get logger
 logger = logging.getLogger(__name__)
 
-# Use environment variable or default to data directory
-DB_PATH = os.getenv("DATABASE_PATH", "data/moonbags.db")
-
 def ensure_db_directory():
-    db_dir = os.path.dirname(DB_PATH)
+    db_dir = os.path.dirname(Config.DATABASE_PATH)
     if db_dir and not os.path.exists(db_dir):
         os.makedirs(db_dir)
-        logger.info(f"Created directory {db_dir} for database")
 
 def init_db():
     ensure_db_directory()
-    with sqlite3.connect(DB_PATH) as conn:
+    with sqlite3.connect(Config.DATABASE_PATH) as conn:
         cursor = conn.cursor()
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS groups (
@@ -28,46 +24,20 @@ def init_db():
                 website TEXT,
                 telegram_link TEXT,
                 twitter_link TEXT,
-                media_file_id TEXT
+                chart_link TEXT,
+                media_file_id TEXT,
+                emoji_step REAL DEFAULT 5
             )
         """)
-        cursor.execute("PRAGMA table_info(groups)")
-        columns = [col[1] for col in cursor.fetchall()]
-        if "token_symbol" not in columns:
-            cursor.execute("ALTER TABLE groups ADD COLUMN token_symbol TEXT DEFAULT 'TOKEN'")
-            logger.info("Added missing column: token_symbol to groups table")
-
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS buys (
-                transaction_id TEXT PRIMARY KEY,
-                token_address TEXT NOT NULL,
-                buyer_address TEXT NOT NULL,
-                amount REAL NOT NULL,
-                usd_value REAL NOT NULL,
-                timestamp INTEGER NOT NULL
-            )
-        """)
-
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS boosts (
                 token_address TEXT PRIMARY KEY,
-                expiration_timestamp INTEGER NOT NULL
+                expiration INTEGER INTEGER NOT NULL,
+                boost_level INTEGER DEFAULT 1
             )
         """)
         conn.commit()
-        logger.info("Database initialized successfully")
 
 def get_db():
     ensure_db_directory()
-    return sqlite3.connect(DB_PATH)
-
-def clear_fake_symbols():
-    with sqlite3.connect(DB_PATH) as conn:
-        cursor = conn.cursor()
-        fake_list = ['MEME', 'MOON', 'APE', 'SUI', 'DOGE', 'PEPE']
-        placeholders = ', '.join('?' for _ in fake_list)
-        query = f"UPDATE groups SET token_symbol = 'TOKEN' WHERE token_symbol IN ({placeholders})"
-        cursor.execute(query, fake_list)
-        affected = cursor.rowcount
-        conn.commit()
-        logger.info(f"Cleared {affected} fake token symbol entries in groups table")
+    return sqlite3.connect(Config.DATABASE_PATH)
