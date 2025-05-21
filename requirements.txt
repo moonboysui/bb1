@@ -1,5 +1,7 @@
-python-telegram-bot[job-queue]==20.3
-pysui>=1.1.0
-requests>=2.31.0
-aiohttp>=3.8.5
-python-dotenv>=1.0.0
+python-telegram-bot==20.6
+aiohttp==3.8.5
+requests==2.31.0
+python-dotenv==1.0.0
+pytz==2023.3
+SQLite3-Utils==0.2
+asyncio==3.4.3
