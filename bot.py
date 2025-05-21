@@ -6,11 +6,12 @@ import asyncio
 import json
 from datetime import datetime, timedelta
 import requests
+import sqlite3 # Added import for sqlite3 IntegrityError
 
 # Import web for aiohttp server
 from aiohttp import web
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, Message
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, Message, ReplyKeyboardRemove # <-- FIXED LINE HERE!
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -180,7 +181,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.message.reply_text(
         "Welcome! Let's set up your bot for a group. "
         "First, what is the token address you want to track on Sui?",
-        reply_markup=ReplyKeyboardRemove(),
+        reply_markup=ReplyKeyboardRemove(), # <--- This is where ReplyKeyboardRemove is used
     )
     return INPUT_TOKEN_ADDRESS
 
@@ -194,7 +195,7 @@ async def receive_token_address(update: Update, context: ContextTypes.DEFAULT_TY
         return INPUT_TOKEN_ADDRESS
     
     context.user_data["temp_token_address"] = token_address
-    token_info = sui_api.fetch_token_info(token_address)
+    token_info = fetch_token_info(token_address)
     token_symbol = token_info.get("symbol", "TOKEN")
     context.user_data["temp_token_symbol"] = token_symbol
 
@@ -579,8 +580,6 @@ async def trend_alert(context: ContextTypes.DEFAULT_TYPE):
     # Obtaining accurate 30-min volume and price change requires a more granular
     # data source (e.g., a real-time data provider with historical data or a custom indexer).
     # For this example, we'll use a placeholder for 30-min volume/price change.
-    # You will need to enhance `Workspace_token_info` or use another API if precise
-    # 30-min data is critical for your leaderboard.
     
     token_metrics = {}
     for group in all_groups:
@@ -735,9 +734,10 @@ def main():
     application.run_polling()
 
 if __name__ == "__main__":
-    from telegram.ext import ReplyKeyboardRemove # Import for ReplyKeyboardRemove
+    # Removed the problematic import here, as it's now at the top
+    # from telegram.ext import ReplyKeyboardRemove # Import for ReplyKeyboardRemove
 
     # Clear fake symbols on startup, if you want this for fresh database testing
-    # database.clear_fake_symbols()
+    # database.clear_fake_symbols() # Ensure database module is accessible for this call
 
     main()
