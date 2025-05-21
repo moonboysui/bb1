@@ -1,6 +1,7 @@
 # ✅ This file replaces `sui_api.py` with real API logic using Birdeye for Sui token tracking.
 # 📌 Assumes you sign up and get a free Birdeye API key.
 
+import os
 import requests
 import logging
 import time
