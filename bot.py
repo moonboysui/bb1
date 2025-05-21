@@ -186,7 +186,7 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         # Get token symbol for display
         try:
-            token_symbol = await get_token_symbol(settings['token_address'])
+            token_symbol = get_token_symbol(settings['token_address'])
             settings['token_symbol'] = token_symbol
         except Exception as e:
             logger.error(f"Error fetching token symbol: {e}")
@@ -441,7 +441,7 @@ async def boost_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Get token symbol if possible
     try:
-        token_symbol = await get_token_symbol(token_address)
+        token_symbol = get_token_symbol(token_address)
         context.user_data['boost_token_symbol'] = token_symbol
     except Exception as e:
         logger.error(f"Error fetching token symbol: {e}")
@@ -667,7 +667,7 @@ async def trend_alert(context: ContextTypes.DEFAULT_TYPE):
         for token in tokens:
             try:
                 # Get token info
-                info = await fetch_token_info(token)
+                info = fetch_token_info(token)
                 symbol = info.get('symbol', 'TOKEN')
                 market_cap = info.get('market_cap', 0)
                 price_change = info.get('price_change_30m', 0)
@@ -801,7 +801,7 @@ async def check_buys(context: ContextTypes.DEFAULT_TYPE):
         # Fetch recent buys for all tracked tokens
         for token_address in tokens:
             try:
-                buys = await fetch_recent_buys(token_address, last_check)
+                buys = fetch_recent_buys(token_address, last_check)
                 
                 if not buys:
                     continue
@@ -831,7 +831,7 @@ async def check_buys(context: ContextTypes.DEFAULT_TYPE):
                         conn.commit()
                     
                     # Get token info for the alert
-                    token_info = await fetch_token_info(token_address)
+                    token_info = fetch_token_info(token_address)
                     token_symbol = token_info.get('symbol', 'TOKEN')
                     token_price = token_info.get('price', 0)
                     token_market_cap = token_info.get('market_cap', 0)
