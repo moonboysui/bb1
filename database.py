@@ -2,22 +2,26 @@ import os
 import sqlite3
 import logging
 
+# Logger setup
 logger = logging.getLogger(__name__)
+
+# Database path from environment or default
 DB_PATH = os.getenv("DATABASE_PATH", "data/moonbags.db")
 
 def ensure_db_directory():
+    """Ensure the database directory exists."""
     db_dir = os.path.dirname(DB_PATH)
     if db_dir and not os.path.exists(db_dir):
-        os.makedirs(db_dir, exist_ok=True)
+        os.makedirs(db_dir)
         logger.info(f"Created directory {db_dir} for database")
 
 def init_db():
-    """Initialize the SQLite database with required tables."""
+    """Initialize the database tables if they don't exist."""
     ensure_db_directory()
     with sqlite3.connect(DB_PATH) as conn:
-        cur = conn.cursor()
-        # Groups table (one token config per Telegram group)
-        cur.execute("""
+        cursor = conn.cursor()
+        # Groups table (one row per Telegram group using the bot)
+        cursor.execute("""
             CREATE TABLE IF NOT EXISTS groups (
                 group_id INTEGER PRIMARY KEY,
                 token_address TEXT NOT NULL,
@@ -30,14 +34,14 @@ def init_db():
                 media_file_id TEXT
             )
         """)
-        # Ensure token_symbol column exists (for backward compatibility)
-        cur.execute("PRAGMA table_info(groups)")
-        columns = [col[1] for col in cur.fetchall()]
+        # If an older version of the DB exists, ensure token_symbol column exists
+        cursor.execute("PRAGMA table_info(groups)")
+        columns = [col[1] for col in cursor.fetchall()]
         if "token_symbol" not in columns:
-            cur.execute("ALTER TABLE groups ADD COLUMN token_symbol TEXT DEFAULT 'TOKEN'")
-            logger.info("Added missing column token_symbol to groups table")
-        # Buys table (records of recent buy events for volume calculations)
-        cur.execute("""
+            cursor.execute("ALTER TABLE groups ADD COLUMN token_symbol TEXT DEFAULT 'TOKEN'")
+            logger.info("Added missing column: token_symbol to groups table")
+        # Buys table (records of buy transactions for volume and alert deduplication)
+        cursor.execute("""
             CREATE TABLE IF NOT EXISTS buys (
                 transaction_id TEXT PRIMARY KEY,
                 token_address TEXT NOT NULL,
@@ -47,8 +51,8 @@ def init_db():
                 timestamp INTEGER NOT NULL
             )
         """)
-        # Boosts table (active token boosts with expiry)
-        cur.execute("""
+        # Boosts table (tracks active boosts for tokens)
+        cursor.execute("""
             CREATE TABLE IF NOT EXISTS boosts (
                 token_address TEXT PRIMARY KEY,
                 expiration_timestamp INTEGER NOT NULL
@@ -58,18 +62,19 @@ def init_db():
         logger.info("Database initialized successfully")
 
 def get_db():
-    """Obtain a new database connection (for use with context manager)."""
+    """Get a new database connection (SQLite)."""
     ensure_db_directory()
     return sqlite3.connect(DB_PATH)
 
 def clear_fake_symbols():
-    """Reset any placeholder/fake token symbols in groups table to 'TOKEN'. """
+    """Replace any generic/fake token symbols in groups with 'TOKEN' placeholder."""
     with sqlite3.connect(DB_PATH) as conn:
-        cur = conn.cursor()
+        cursor = conn.cursor()
         fake_list = ['MEME', 'MOON', 'APE', 'SUI', 'DOGE', 'PEPE']
-        placeholders = ','.join('?' for _ in fake_list)
-        cur.execute(f"UPDATE groups SET token_symbol = 'TOKEN' WHERE token_symbol IN ({placeholders})", fake_list)
-        affected = cur.rowcount
+        placeholders = ', '.join('?' for _ in fake_list)
+        query = f"UPDATE groups SET token_symbol = 'TOKEN' WHERE token_symbol IN ({placeholders})"
+        cursor.execute(query, fake_list)
+        affected = cursor.rowcount
         conn.commit()
         if affected:
             logger.info(f"Cleared {affected} fake token symbol entries in groups table")
