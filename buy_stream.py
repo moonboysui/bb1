@@ -1,78 +1,107 @@
 import os
-import asyncio
-import websockets
 import json
+import asyncio
+import aiohttp
 import logging
-from database import get_db
+from queue import Queue, Empty
 
 logger = logging.getLogger(__name__)
 
-BLOCKEDEN_WWS_URL = os.getenv("BLOCKEDEN_WWS_URL")
-# You can add more DEX event types here!
-DEX_EVENTS = [
-    {"MoveEventType": "0x23a79c4eb5e60d19a1674058a77c4ba0486265c705f5c7f1f1233cfb2e25e1c6::pool::SwapEvent"}, # Cetus
-    # {"MoveEventType": "0x...::amm::SwapEvent"}, # Add more if needed
-]
+# BlockEden Sui WebSocket URL (requires an API key token in the URL)
+WS_URL = os.getenv("BLOCKEDEN_WSS", "")
 
-def parse_swap_event(event):
-    data = event.get('parsedJson', {})
-    return {
-        "token_in": data.get("coin_in_address"),
-        "token_out": data.get("coin_out_address"),
-        "buyer_address": data.get("owner"),
-        "amount": float(data.get("amount_out", 0)),
-        "token_amt_str": f"{float(data.get('amount_token_out', 0)):.2f}" if 'amount_token_out' in data else "",
-        "tx_hash": event.get("id", ""),
-        "timestamp": int(event.get("timestampMs", 0)) // 1000,
-    }
+# Thread-safe queues for cross-thread communication
+event_queue = Queue()      # events from WS thread to main thread
+subscribe_queue = Queue()  # subscription requests from main thread to WS thread
 
-async def start_buy_stream(alert_callback):
-    while True:
-        try:
-            async with websockets.connect(BLOCKEDEN_WWS_URL) as ws:
-                for event_filter in DEX_EVENTS:
-                    sub_msg = {
-                        "jsonrpc": "2.0",
-                        "id": 1,
-                        "method": "sui_subscribeEvent",
-                        "params": [event_filter]
-                    }
-                    await ws.send(json.dumps(sub_msg))
-                logger.info("Subscribed to DEX events on BlockEden WWS")
-                while True:
-                    msg = await ws.recv()
-                    msg_json = json.loads(msg)
-                    event = msg_json.get("params", {}).get("result", {}).get("event", {})
-                    if not event:
-                        continue
-                    buy = parse_swap_event(event)
-                    if not buy or not buy.get("token_out"):
-                        continue
-                    with get_db() as conn:
-                        cursor = conn.cursor()
-                        cursor.execute(
-                            "SELECT group_id, min_buy_usd, buystep, emoji, website, telegram_link, twitter_link, media_file_id FROM groups WHERE token_address = ?",
-                            (buy["token_out"],)
-                        )
-                        groups = cursor.fetchall()
-                    if not groups:
-                        continue
-                    for group_data in groups:
-                        with get_db() as conn:
-                            cursor = conn.cursor()
-                            cursor.execute(
-                                "INSERT OR IGNORE INTO buys (transaction_id, token_address, buyer_address, amount, usd_value, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
-                                (
-                                    buy['tx_hash'],
-                                    buy['token_out'],
-                                    buy['buyer_address'],
-                                    buy['amount'],
-                                    0,
-                                    buy['timestamp'],
-                                )
-                            )
-                            conn.commit()
-                        await alert_callback(buy, group_data)
-        except Exception as e:
-            logger.error(f"BlockEden WWS error: {e}")
-            await asyncio.sleep(5)
+async def _ws_listen(ws):
+    """Listen for incoming WebSocket messages and handle subscriptions."""
+    try:
+        while True:
+            # Wait for next WS message (with timeout to check subscribe_queue)
+            msg = None
+            try:
+                msg = await asyncio.wait_for(ws.receive(), timeout=1.0)
+            except asyncio.TimeoutError:
+                msg = None
+            # Process any pending subscription requests from main thread
+            while True:
+                try:
+                    new_token = subscribe_queue.get_nowait()
+                except Empty:
+                    break
+                try:
+                    # Subscribe to CoinBalanceChange events for the new token:contentReference[oaicite:0]{index=0}
+                    filter_params = {"All": [{"EventType": "CoinBalanceChange"}, {"CoinType": new_token}]}
+                    subscribe_req = {"jsonrpc": "2.0", "id": new_token, "method": "sui_subscribeEvent", "params": [filter_params]}
+                    await ws.send_str(json.dumps(subscribe_req))
+                    ack = await ws.receive()  # subscription acknowledgement
+                    if ack.type == aiohttp.WSMsgType.TEXT:
+                        resp = json.loads(ack.data)
+                        if resp.get("error"):
+                            logger.error(f"Subscription error for {new_token}: {resp['error']}")
+                        else:
+                            logger.info(f"Subscribed to events for token {new_token}")
+                except Exception as e:
+                    logger.error(f"Failed to subscribe to {new_token}: {e}")
+            # Handle incoming message (if any)
+            if msg:
+                if msg.type == aiohttp.WSMsgType.TEXT:
+                    data = json.loads(msg.data)
+                    # If this is an event notification, put event result in queue
+                    if data.get("method") == "sui_subscribeEvent":
+                        event = data.get("params", {}).get("result")
+                        if event:
+                            event_queue.put(event)
+                elif msg.type in (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
+                    break
+    finally:
+        await ws.close()
+        logger.info("WebSocket connection closed.")
+
+async def run_ws_client(initial_tokens):
+    """Connect to BlockEden WebSocket and subscribe to initial tokens' events."""
+    if not WS_URL:
+        logger.warning("No BlockEden WSS URL provided; skipping WebSocket connection.")
+        return
+    session = aiohttp.ClientSession()
+    try:
+        ws = await session.ws_connect(WS_URL)
+        logger.info("Connected to BlockEden WebSocket.")
+        # Subscribe to each initial token's CoinBalanceChange events
+        for token in initial_tokens:
+            try:
+                filter_params = {"All": [{"EventType": "CoinBalanceChange"}, {"CoinType": token}]}
+                subscribe_req = {"jsonrpc": "2.0", "id": token, "method": "sui_subscribeEvent", "params": [filter_params]}
+                await ws.send_str(json.dumps(subscribe_req))
+                ack = await ws.receive()
+                if ack.type == aiohttp.WSMsgType.TEXT:
+                    resp = json.loads(ack.data)
+                    if resp.get("error"):
+                        logger.error(f"Subscription failed for {token}: {resp['error']}")
+                    else:
+                        logger.info(f"Subscribed to token events: {token}")
+            except Exception as e:
+                logger.error(f"Error subscribing to {token}: {e}")
+        # Enter listening loop (indefinitely until connection closes)
+        await _ws_listen(ws)
+    except Exception as e:
+        logger.error(f"WebSocket connection error: {e}")
+    finally:
+        await session.close()
+        logger.info("WebSocket session closed.")
+
+def start_ws_thread(initial_tokens):
+    """Launch the WebSocket client in a separate thread."""
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    task = loop.create_task(run_ws_client(initial_tokens))
+    try:
+        loop.run_until_complete(task)
+    except Exception as e:
+        logger.error(f"Exception in WebSocket thread: {e}")
+    # Keep the event loop running (if run_ws_client returns, connection ended)
+    try:
+        loop.run_forever()
+    finally:
+        loop.close()
