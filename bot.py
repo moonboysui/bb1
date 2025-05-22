@@ -3,9 +3,9 @@ import logging
 import threading
 import asyncio
 from dotenv import load_dotenv
-from datetime import datetime
-import math
 import aiohttp.web
+from datetime import datetime, timedelta
+import math
 
 from telegram import (
     Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -16,8 +16,8 @@ from telegram.ext import (
 )
 
 from database import init_db, clear_fake_symbols, get_db
-from utils import shorten_address, format_alert
-from sui_api import fetch_token_info, get_token_symbol, verify_payment
+from utils import shorten_address, format_alert, valid_token_address
+from sui_api import fetch_token_info, get_token_symbol
 from buy_stream import start_buy_stream
 
 load_dotenv()
@@ -29,7 +29,6 @@ BOOST_RECEIVER = os.getenv("BOOST_RECEIVER")
 TRENDING_CHANNEL = os.getenv("TRENDING_CHANNEL")
 PORT = int(os.getenv("PORT", 8080))
 
-# Conversation states
 (
     CHOOSING, INPUT_TOKEN, INPUT_MIN_BUY, INPUT_EMOJI, INPUT_BUYSTEP,
     INPUT_WEBSITE, INPUT_TELEGRAM, INPUT_TWITTER, INPUT_MEDIA, BOOST_CONFIRM, BOOST_WAIT
@@ -64,7 +63,6 @@ def start_http_server():
     loop.run_until_complete(run_server())
     loop.run_forever()
 
-# --- Setup Keyboard ---
 def get_menu_keyboard():
     keyboard = [
         [InlineKeyboardButton("🔗 Track Token", callback_data="set_token"), InlineKeyboardButton("📉 Set Min Buy ($)", callback_data="set_min_buy")],
@@ -104,7 +102,7 @@ def save_group_settings(group_id, settings):
         logger.error(f"Error saving group settings: {e}")
         return False
 
-# --- Conversation Handlers for Setup ---
+# --- Conversation Handlers ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.chat.type in ['group', 'supergroup']:
         member = await context.bot.get_chat_member(update.effective_chat.id, update.effective_user.id)
@@ -133,24 +131,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return ConversationHandler.END
 
-async def start_private(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.user_data.get('setup_group_id'):
-        await update.message.reply_text(
-            "Please add me to a group first, then use /start in that group to begin setup."
-        )
-        return ConversationHandler.END
-    await update.message.reply_text(
-        f"🚀 Moonbags BuyBot Setup\n\nYou're configuring the bot for: {context.user_data['setup_group_name']}",
-        reply_markup=get_menu_keyboard()
-    )
-    return CHOOSING
-
 async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     choice = query.data
     prompts = {
-        "set_token": "🔗 Please paste the token address you want to track (starting with 0x):",
+        "set_token": "🔗 Please paste the Sui token address (e.g. 0x123...::MODULE::TYPE):",
         "set_min_buy": "📉 Only alert for buys above what USD value?",
         "set_emoji": "🎯 Send the emoji you'd like to represent buys (e.g. 🔥).",
         "set_buystep": "🪙 Enter how many dollars per emoji (e.g. 5 means 1 emoji per $5).",
@@ -214,8 +200,8 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def receive_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
     token = update.message.text.strip()
-    if not token.startswith("0x") or len(token) < 10:
-        await update.message.reply_text("⚠️ That doesn't look like a valid token address. Please enter an address starting with 0x.")
+    if not valid_token_address(token):
+        await update.message.reply_text("⚠️ Invalid Sui token address. Format should be 0x...::MODULE::TYPE")
         return INPUT_TOKEN
     if 'settings' not in context.user_data:
         context.user_data['settings'] = {}
@@ -415,7 +401,6 @@ def main():
     conv_handler = ConversationHandler(
         entry_points=[
             CommandHandler("start", start),
-            MessageHandler(filters.TEXT & ~filters.COMMAND, start_private)
         ],
         states={
             CHOOSING: [CallbackQueryHandler(menu_handler)],
@@ -432,11 +417,13 @@ def main():
             ]
         },
         fallbacks=[CommandHandler("cancel", cancel)],
+        allow_reentry=True
     )
 
     application.add_handler(conv_handler)
+    # As backup, make buttons always work:
+    application.add_handler(CallbackQueryHandler(menu_handler))
 
-    # Start buy stream in background, pass application so it can send messages
     loop = asyncio.get_event_loop()
     loop.create_task(start_buy_stream(lambda buy, group: handle_live_buy(buy, group, application)))
 
