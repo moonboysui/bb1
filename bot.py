@@ -820,6 +820,7 @@ def main():
         allow_reentry=True
     )
     application.add_handler(conv_handler)
+    application.add_handler(CallbackQueryHandler(menu_handler))  # Global menu handler fix
     # Standalone command handlers
     application.add_handler(CommandHandler("boost", boost_command))
     application.add_handler(CallbackQueryHandler(boost_callback, pattern=r"^boost_"))
