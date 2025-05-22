@@ -5,7 +5,7 @@ import time
 import asyncio
 import math
 from datetime import datetime
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -16,7 +16,7 @@ from telegram.ext import (
     ContextTypes,
 )
 from database import init_db, get_db, clear_fake_symbols
-from utils import shorten_address, format_alert
+from utils import shorten_address
 from sui_api import verify_payment, fetch_recent_buys, fetch_token_info, get_token_symbol
 import buy_stream  # WebSocket event handling for buy tracking
 
@@ -77,7 +77,15 @@ def start_http_server():
 # --- Command and conversation handlers ---
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /start in a group to initialize the setup process."""
+    """Handle /start in a group or with deep-link to initialize processes."""
+    # Check if this is a deep-link for boosting (e.g. /start boost_<token>)
+    if context.args and context.args[0].startswith("boost_"):
+        token_address = context.args[0][6:]
+        context.args = [token_address]  # prepare args for boost_command
+        # Redirect to boost flow
+        await boost_command(update, context)
+        return ConversationHandler.END
+
     if update.message.chat.type in ('group', 'supergroup'):
         # Only allow group admins to configure
         try:
@@ -87,9 +95,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return ConversationHandler.END
         except Exception as e:
             logger.error(f"Failed to check admin status: {e}")
+            # If we can't verify, still proceed for safety
         # Store the group info for configuration
         context.user_data['setup_group_id'] = update.effective_chat.id
-        context.user_data['setup_group_name'] = update.effective_chat.title
+        context.user_data['setup_group_name'] = update.effective_chat.title or "this group"
         # Prompt user to continue setup in private chat
         keyboard = [[InlineKeyboardButton("➡️ Continue in Private Chat", url=f"https://t.me/{context.bot.username}")]]
         await update.message.reply_text(
@@ -98,7 +107,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return ConversationHandler.END
     else:
-        # If /start is used in private without initiating from a group
+        # If /start is used in private (user must have initiated from a group)
         if 'setup_group_id' in context.user_data:
             await update.message.reply_text(
                 f"🚀 Moonbags BuyBot Setup\n\nYou're configuring the bot for: {context.user_data['setup_group_name']}",
@@ -109,19 +118,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("Please use /start in a group to begin configuration.")
             return ConversationHandler.END
 
-async def start_private(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle when the user opens the private chat after using /start in a group."""
-    if not context.user_data.get('setup_group_id'):
-        await update.message.reply_text("Please send /start in your group first to initiate setup.")
-        return ConversationHandler.END
-    await update.message.reply_text(
-        f"🚀 Moonbags BuyBot Setup\n\nYou're configuring the bot for: {context.user_data['setup_group_name']}",
-        reply_markup=get_menu_keyboard()
-    )
-    return CHOOSING
-
 async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle selection from the setup menu keyboard."""
+    """Handle selection from the setup menu inline keyboard."""
     query = update.callback_query
     await query.answer()
     choice = query.data
@@ -147,6 +145,7 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text("📷 Send a photo or GIF for alerts (or type 'skip' to skip):")
         return INPUT_MEDIA
     elif choice == "finish_setup":
+        # Ensure we have a group context
         if not context.user_data.get('setup_group_id'):
             await query.message.reply_text("Error: No group selected. Please restart setup from the group.")
             return ConversationHandler.END
@@ -161,7 +160,7 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=get_menu_keyboard()
             )
             return CHOOSING
-        # Fetch token symbol for display/storage
+        # Fetch token symbol for storage/display
         try:
             token_symbol = get_token_symbol(settings['token_address'])
             settings['token_symbol'] = token_symbol
@@ -174,7 +173,7 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # If WebSocket tracking is enabled, subscribe to this token's events
         if buy_stream.WS_URL:
             buy_stream.subscribe_queue.put(settings['token_address'])
-        # Send summary to user and confirmation to group
+        # Send summary to user (private) and confirmation to group
         summary = (
             "✅ Setup Complete!\n\n"
             f"Token: {shorten_address(settings['token_address'])} (${settings['token_symbol']})\n"
@@ -184,9 +183,9 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if settings.get('website'):
             summary += f"Website: {settings['website']}\n"
         if settings.get('telegram_link'):
-            summary += f"Telegram: {settings['telegram_link']}\n"
+            summary += f"Telegram: {settings.get('telegram_link')}\n"
         if settings.get('twitter_link'):
-            summary += f"Twitter: {settings['twitter_link']}\n"
+            summary += f"Twitter: {settings.get('twitter_link')}\n"
         if settings.get('media_file_id'):
             summary += "Media: ✅ Uploaded\n"
         summary += "\nThe bot will now track buys for this token in your group!"
@@ -301,7 +300,7 @@ async def receive_twitter(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def receive_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Process the media (photo/GIF) input."""
-    # Skip handling
+    # Handle skip
     if update.message.text and update.message.text.strip().lower() == 'skip':
         context.user_data.setdefault('settings', {})['media_file_id'] = None
         await update.message.reply_text(
@@ -311,14 +310,14 @@ async def receive_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return CHOOSING
     # Photo input
     if update.message.photo:
-        file_id = update.message.photo[-1].file_id  # largest size photo
+        file_id = update.message.photo[-1].file_id  # use largest photo size
         context.user_data.setdefault('settings', {})['media_file_id'] = file_id
         await update.message.reply_text(
             "✅ Photo saved for alerts.\n\nWhat next?",
             reply_markup=get_menu_keyboard()
         )
         return CHOOSING
-    # GIF/animation input
+    # Animation (GIF) input
     if update.message.animation:
         file_id = update.message.animation.file_id
         context.user_data.setdefault('settings', {})['media_file_id'] = file_id
@@ -327,18 +326,22 @@ async def receive_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=get_menu_keyboard()
         )
         return CHOOSING
-    # Invalid input
+    # Invalid input type
     await update.message.reply_text("⚠️ Please send a photo or GIF, or type 'skip' to skip.")
     return INPUT_MEDIA
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Cancel the setup process."""
+    """Cancel the setup conversation."""
     context.user_data.clear()
     await update.message.reply_text("✅ Setup cancelled.")
     return ConversationHandler.END
 
 async def boost_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /boost command to initiate token boosting."""
+    """Handle /boost command to initiate token boosting (private chat only)."""
+    # Ensure in private chat
+    if update.message.chat.type != 'private':
+        await update.message.reply_text("⚠️ Please use this command in a private chat with the bot.")
+        return
     if not context.args or len(context.args) != 1:
         await update.message.reply_text("⚠️ Provide a token address.\nUsage: /boost 0x1234...abcd")
         return
@@ -346,7 +349,7 @@ async def boost_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not token_address.startswith("0x"):
         await update.message.reply_text("⚠️ Invalid token address. Must start with 0x.")
         return
-    # Store token for boost flow
+    # Store token info for boost flow
     context.user_data['boost_token'] = token_address
     try:
         token_symbol = get_token_symbol(token_address)
@@ -355,23 +358,22 @@ async def boost_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         token_symbol = "TOKEN"
     context.user_data['boost_token_symbol'] = token_symbol
     # Build boost duration options keyboard
-    buttons = []
+    keyboard = []
     for dur, details in BOOST_OPTIONS.items():
-        # Human-readable duration
         human = dur.replace("h", " Hours").replace("week", " Week").replace("month", " Month")
         if dur in ["1week", "2weeks", "1month"]:
             human = human.replace("s", "s")
         btn_text = f"{human} - {details['cost']} SUI"
-        buttons.append([InlineKeyboardButton(btn_text, callback_data=f"boost_{dur}")])
+        keyboard.append([InlineKeyboardButton(btn_text, callback_data=f"boost_{dur}")])
     await update.message.reply_text(
         f"🚀 Boost ${token_symbol} ({shorten_address(token_address)})\n\n"
         f"Boosting will:\n"
         f"• Put your token at the **top** of the trending leaderboard\n"
         f"• Show **all buys > $20** in @moonbagstrending during the boost\n\n"
         f"Select a boost duration:",
-        reply_markup=InlineKeyboardMarkup(buttons)
+        reply_markup=InlineKeyboardMarkup(keyboard)
     )
-    # No state transition here; next step handled by CallbackQueryHandler
+    # No conversation state transition here; next step handled by boost_callback
 
 async def boost_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle selecting a boost duration from the inline keyboard."""
@@ -386,10 +388,11 @@ async def boost_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text("⚠️ Invalid boost option.")
         return
     details = BOOST_OPTIONS[duration_key]
+    # Store selected boost details
     context.user_data['boost_duration'] = duration_key
     context.user_data['boost_cost'] = details['cost']
     context.user_data['boost_seconds'] = details['duration']
-    # Prepare payment instruction message
+    # Prepare payment instruction
     human = duration_key.replace("h", " Hours").replace("week", " Week").replace("month", " Month")
     if duration_key in ["1week", "2weeks", "1month"]:
         human = human.replace("s", "s")
@@ -403,15 +406,20 @@ async def boost_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"`{BOOST_RECEIVER}`",
         parse_mode="Markdown"
     )
+    # After prompting payment, user should respond with /confirm; use conversation state to wait for it
     return BOOST_CONFIRM
 
 async def confirm_boost(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Confirm the SUI payment for a token boost."""
+    """Confirm the SUI payment for a token boost by transaction hash."""
+    # Ensure in private chat
+    if update.message.chat.type != 'private':
+        await update.message.reply_text("⚠️ Please confirm the boost in a private chat with the bot.")
+        return ConversationHandler.END
     if not context.args or len(context.args) != 1:
         await update.message.reply_text("⚠️ Provide the transaction hash.\nUsage: /confirm <TXHASH>")
-        return
+        return BOOST_CONFIRM
     tx_hash = context.args[0].strip()
-    # Ensure we have pending boost data
+    # Check that boost parameters are present
     token_address = context.user_data.get('boost_token')
     token_symbol = context.user_data.get('boost_token_symbol', 'TOKEN')
     boost_cost = context.user_data.get('boost_cost')
@@ -419,8 +427,8 @@ async def confirm_boost(update: Update, context: ContextTypes.DEFAULT_TYPE):
     boost_seconds = context.user_data.get('boost_seconds')
     if not token_address or boost_cost is None or boost_duration is None or boost_seconds is None:
         await update.message.reply_text("⚠️ No pending boost. Use /boost <token> first.")
-        return
-    # Verify payment asynchronously
+        return ConversationHandler.END
+    # Notify user of verification in progress
     processing_msg = await update.message.reply_text("⏳ Verifying transaction on-chain...")
     try:
         payment_ok = await verify_payment(tx_hash, boost_cost, BOOST_RECEIVER)
@@ -432,13 +440,15 @@ async def confirm_boost(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "- Ensure the transaction is confirmed on-chain\n\n"
                 "Then try /confirm <TXHASH> again."
             )
-            return
+            return BOOST_CONFIRM
         # Payment verified: activate boost
         expiration = int(time.time()) + boost_seconds
         with get_db() as conn:
             cur = conn.cursor()
-            cur.execute("INSERT OR REPLACE INTO boosts (token_address, expiration_timestamp) VALUES (?, ?)",
-                        (token_address, expiration))
+            cur.execute(
+                "INSERT OR REPLACE INTO boosts (token_address, expiration_timestamp) VALUES (?, ?)",
+                (token_address, expiration)
+            )
             conn.commit()
         expiration_time = datetime.utcfromtimestamp(expiration).strftime("%Y-%m-%d %H:%M:%S UTC")
         human = boost_duration.replace("h", " Hours").replace("week", " Week").replace("month", " Month")
@@ -454,21 +464,22 @@ async def confirm_boost(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Clear boost context data
         for key in ['boost_token', 'boost_token_symbol', 'boost_duration', 'boost_cost', 'boost_seconds']:
             context.user_data.pop(key, None)
-        # Announce new boost in trending channel
+        # Announce the boost in the trending channel
         await context.bot.send_message(
             TRENDING_CHANNEL,
             f"🔥 **NEW BOOST!** 🔥\n\n${token_symbol} has been boosted for {human}!\nAll buys will be featured here.",
             parse_mode="Markdown"
         )
-        # If using WebSocket tracking, subscribe to this token (if not already tracked)
+        # If using WebSocket tracking, ensure we are subscribed to this token's events
         if buy_stream.WS_URL:
             buy_stream.subscribe_queue.put(token_address)
     except Exception as e:
         logger.error(f"Error confirming boost: {e}")
         await processing_msg.edit_text("❌ An error occurred during verification. Please try again or contact support.")
+    return ConversationHandler.END
 
 def get_menu_keyboard():
-    """Construct the inline keyboard for configuration menu (2 buttons per row)."""
+    """Construct the inline keyboard for the configuration menu (two buttons per row)."""
     keyboard = [
         [InlineKeyboardButton("🔗 Track Token", callback_data="set_token"),
          InlineKeyboardButton("📉 Set Minimum Buy Size", callback_data="set_min_buy")],
@@ -477,7 +488,7 @@ def get_menu_keyboard():
         [InlineKeyboardButton("💬 Add Telegram Link", callback_data="set_telegram"),
          InlineKeyboardButton("❌ Add X (Twitter) Link", callback_data="set_twitter")],
         [InlineKeyboardButton("📷 Upload Media", callback_data="set_media"),
-         InlineKeyboardButton("✅ Finish Setup", callback_data="finish_setup")]
+         InlineKeyboardButton("✅ Finish Setup", callback_data="finish_setup")],
     ]
     return InlineKeyboardMarkup(keyboard)
 
@@ -486,31 +497,32 @@ def save_group_settings(group_id: int, settings: dict) -> bool:
     try:
         with get_db() as conn:
             cur = conn.cursor()
-            cur.execute("""
+            cur.execute(
+                """
                 INSERT OR REPLACE INTO groups
                 (group_id, token_address, token_symbol, min_buy_usd, emoji, website, telegram_link, twitter_link, media_file_id)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                group_id,
-                settings.get('token_address'),
-                settings.get('token_symbol', 'TOKEN'),
-                settings.get('min_buy_usd', 0),
-                settings.get('emoji', '🔥'),
-                settings.get('website'),
-                settings.get('telegram_link'),
-                settings.get('twitter_link'),
-                settings.get('media_file_id')
-            ))
+                """,
+                (
+                    group_id,
+                    settings.get('token_address'),
+                    settings.get('token_symbol', 'TOKEN'),
+                    settings.get('min_buy_usd', 0),
+                    settings.get('emoji', '🔥'),
+                    settings.get('website'),
+                    settings.get('telegram_link'),
+                    settings.get('twitter_link'),
+                    settings.get('media_file_id')
+                )
+            )
             conn.commit()
         return True
     except Exception as e:
         logger.error(f"Error saving group settings: {e}")
         return False
 
-# --- Background jobs for trending and buy alerts ---
-
 async def trend_alert(context: ContextTypes.DEFAULT_TYPE):
-    """Send the trending top-10 tokens leaderboard to the trending channel."""
+    """Send the trending top tokens leaderboard to the trending channel."""
     try:
         # Gather all tracked tokens and active boosts
         with get_db() as conn:
@@ -519,63 +531,65 @@ async def trend_alert(context: ContextTypes.DEFAULT_TYPE):
             tokens = [row[0] for row in cur.fetchall()]
             cur.execute("SELECT token_address, expiration_timestamp FROM boosts WHERE expiration_timestamp > ?", (int(time.time()),))
             active_boosts = {row[0]: row[1] for row in cur.fetchall()}
-        # Include boosted tokens not in any group
+        # Include boosted tokens not currently in any group
         for token in active_boosts:
             if token not in tokens:
                 tokens.append(token)
         if not tokens:
             logger.info("No tokens being tracked; skipping trending update.")
             return
-        # Fetch data for each token
+        # Fetch data for each token (price, market cap, 30m price change, 30m volume)
         token_data = []
+        cutoff_time = int(time.time()) - 1800  # 30 minutes ago (seconds)
         for token in tokens:
             try:
                 info = fetch_token_info(token)
                 symbol = info.get('symbol', 'TOKEN')
                 market_cap = info.get('market_cap', 0.0)
+                # If fetch_token_info provides price_change_30m, use it; otherwise default to 0
                 price_change = info.get('price_change_30m', 0.0)
                 # Calculate 30-min volume from stored buys
-                cutoff = int(time.time()) - 1800
                 with get_db() as conn:
                     cur = conn.cursor()
-                    cur.execute("SELECT SUM(usd_value) FROM buys WHERE token_address = ? AND timestamp > ?", (token, cutoff))
-                    volume = cur.fetchone()[0] or 0.0
+                    cur.execute("SELECT SUM(usd_value) FROM buys WHERE token_address = ? AND timestamp > ?", (token, cutoff_time))
+                    volume_30m = cur.fetchone()[0] or 0.0
                 is_boosted = token in active_boosts
                 boost_remaining = active_boosts[token] - int(time.time()) if is_boosted else 0
                 token_data.append({
                     "symbol": symbol,
                     "market_cap": market_cap,
                     "price_change": price_change,
-                    "volume_30m": volume,
+                    "volume_30m": volume_30m,
                     "is_boosted": is_boosted,
                     "boost_remaining": boost_remaining
                 })
             except Exception as e:
-                logger.error(f"Error fetching data for {token}: {e}")
+                logger.error(f"Error fetching data for token {token}: {e}")
         if not token_data:
             logger.warning("No token data available for trending leaderboard.")
             return
-        # Sort tokens: boosted first (with longer boost first), then by volume
+        # Sort tokens: boosted tokens first (with longer remaining boost first), then by volume (descending)
         token_data.sort(key=lambda x: (-1 if x['is_boosted'] else 0, -x['boost_remaining'], -x['volume_30m']))
         top_tokens = token_data[:10]
         now = datetime.utcnow()
         leaderboard_text = f"🔥 **MOONBAGS TRENDING**: {now.strftime('%H:%M UTC')}\n\n"
+        rank_emojis = ["1️⃣","2️⃣","3️⃣","4️⃣","5️⃣","6️⃣","7️⃣","8️⃣","9️⃣","🔟"]
         for i, token in enumerate(top_tokens, start=1):
-            rank_emoji = ["1️⃣","2️⃣","3️⃣","4️⃣","5️⃣","6️⃣","7️⃣","8️⃣","9️⃣","🔟"][i-1]
-            # Price change arrow
-            if token['price_change'] > 0:
+            rank_emoji = rank_emojis[i-1]
+            # Price change arrow and format
+            if token['price_change'] and token['price_change'] > 0:
                 change_str = f"📈 +{token['price_change']:.1f}%"
-            elif token['price_change'] < 0:
+            elif token['price_change'] and token['price_change'] < 0:
                 change_str = f"📉 {token['price_change']:.1f}%"
             else:
                 change_str = "➖ 0%"
-            # Market cap formatting
-            market_cap = token['market_cap']
-            if market_cap > 1_000_000:
-                market_cap_str = f"${market_cap/1_000_000:.1f}M"
+            # Market cap format
+            mc = token['market_cap']
+            if mc > 1_000_000:
+                market_cap_str = f"${mc/1_000_000:.1f}M"
             else:
-                market_cap_str = f"${market_cap/1000:.1f}K"
-            # Boost label if applicable
+                market_cap_str = f"${mc/1000:.1f}K"
+            # Boost label if boosted
             boost_label = ""
             if token['is_boosted']:
                 hours_left = math.ceil(token['boost_remaining'] / 3600)
@@ -586,11 +600,10 @@ async def trend_alert(context: ContextTypes.DEFAULT_TYPE):
                 f"{change_str}\n\n"
             )
         leaderboard_text += "💎 *Your token not trending?* Boost it with /boost!"
-        # Send trending leaderboard message
+        # Send the leaderboard and pin it if due
         msg = await context.bot.send_message(TRENDING_CHANNEL, leaderboard_text, parse_mode="Markdown")
-        # Auto-pin the message every 30 minutes
         last_pin = context.bot_data.get('last_pin_time', 0)
-        if time.time() - last_pin >= 1800:
+        if time.time() - last_pin >= 1800:  # pin at most every 30 minutes
             try:
                 await context.bot.pin_chat_message(TRENDING_CHANNEL, msg.message_id)
                 context.bot_data['last_pin_time'] = time.time()
@@ -600,7 +613,7 @@ async def trend_alert(context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Error in trend_alert job: {e}")
 
 async def check_buys(context: ContextTypes.DEFAULT_TYPE):
-    """Fallback polling job: check for new buys via API if WebSocket is not used."""
+    """Periodic polling (fallback) to check for new buys via HTTP API if WebSocket is not used."""
     try:
         with get_db() as conn:
             cur = conn.cursor()
@@ -616,7 +629,7 @@ async def check_buys(context: ContextTypes.DEFAULT_TYPE):
             if not buys:
                 continue
             for buy in buys:
-                # Store in DB (ignore duplicates by tx_id)
+                # Store in DB (ignore duplicates)
                 with get_db() as conn:
                     cur = conn.cursor()
                     cur.execute("""
@@ -637,21 +650,21 @@ async def process_ws_events(context: ContextTypes.DEFAULT_TYPE):
             # Parse the WebSocket event data for coin balance changes
             coin_type = event.get("coinType") or event.get("type")
             if not coin_type:
-                continue  # skip if no coin type
-            token_address = coin_type  # the Move token address string
+                continue  # skip if no coin type in event
+            token_address = coin_type  # The Move token type (address) string
             amount = event.get("amount", 0)
             if amount is None or float(amount) <= 0:
-                continue  # skip non-positive changes (sells/transfers out)
-            # Determine buyer address (owner) if present
+                continue  # skip negative or zero changes (likely sells or transfers out)
+            # Determine buyer address (owner field) if present
             owner = event.get("owner")
             if isinstance(owner, dict):
                 buyer_address = owner.get("AddressOwner") or owner.get("address") or ""
             else:
                 buyer_address = str(owner) if owner else ""
             if not buyer_address.startswith("0x"):
-                continue  # skip if owner is not a user address
-            # Compute token amount and USD value
-            token_amount = float(amount) / 1_000_000_000  # assume 10^9 decimals for token quantity
+                continue  # skip if owner is not a standard address (e.g., system)
+            # Compute token amount (assuming token has 10^9 decimals) and USD value
+            token_amount = float(amount) / 1_000_000_000
             info = fetch_token_info(token_address)
             price = info.get('price', 0.0)
             usd_value = token_amount * price
@@ -670,14 +683,14 @@ async def process_ws_events(context: ContextTypes.DEFAULT_TYPE):
                     VALUES (?, ?, ?, ?, ?, ?)
                 """, (buy_data['tx_hash'], token_address, buyer_address, token_amount, usd_value, buy_data['timestamp']))
                 conn.commit()
-            # Send alerts for this buy event
+            # Send alerts for this buy event to relevant groups and trending channel
             await send_buy_alerts(token_address, buy_data, context)
     except Exception as e:
         logger.error(f"Error processing WS events: {e}")
 
 async def send_buy_alerts(token_address: str, buy: dict, context: ContextTypes.DEFAULT_TYPE):
-    """Send buy alert messages to all groups tracking the token and possibly to trending channel."""
-    # Fetch latest token info for formatting
+    """Send buy alert messages to all groups tracking the token, and to trending channel if applicable."""
+    # Fetch latest token info to include up-to-date stats in the alert
     token_info = fetch_token_info(token_address)
     token_symbol = token_info.get('symbol', 'TOKEN')
     token_price = token_info.get('price', 0.0)
@@ -685,7 +698,7 @@ async def send_buy_alerts(token_address: str, buy: dict, context: ContextTypes.D
     token_liquidity = token_info.get('liquidity', 0.0)
     usd_str = f"${buy['usd_value']:.2f}"
     amount_str = f"{buy['amount']:.4f}"
-    # Get all group configurations for this token
+    # Get all group configurations for this token from DB
     with get_db() as conn:
         cur = conn.cursor()
         cur.execute("""
@@ -695,13 +708,20 @@ async def send_buy_alerts(token_address: str, buy: dict, context: ContextTypes.D
         group_rows = cur.fetchall()
     for (group_id, min_buy_usd, emoji, website, telegram_link, twitter_link, media_file_id) in group_rows:
         if buy['usd_value'] < float(min_buy_usd or 0):
-            continue  # below this group's alert threshold
-        # Compose alert message text with dynamic emoji count
+            continue  # skip groups where this buy is below threshold
+        # Compose alert message text with repeated emojis based on buy size
+        emoji_symbol = emoji or "🔥"
         emoji_count = max(1, min(20, int(buy['usd_value'] / 5)))
-        emojis = (emoji or "🔥") * emoji_count
-        # Format market cap and liquidity for display
-        market_cap_str = f"${token_market_cap/1000000:.2f}M" if token_market_cap > 1_000_000 else f"${token_market_cap/1000:.2f}K"
-        liquidity_str = f"${token_liquidity/1000000:.2f}M" if token_liquidity > 1_000_000 else f"${token_liquidity/1000:.2f}K"
+        emojis = emoji_symbol * emoji_count
+        # Format market cap and liquidity nicely
+        if token_market_cap > 1_000_000:
+            market_cap_str = f"${token_market_cap/1_000_000:.2f}M"
+        else:
+            market_cap_str = f"${token_market_cap/1000:.2f}K"
+        if token_liquidity > 1_000_000:
+            liquidity_str = f"${token_liquidity/1_000_000:.2f}M"
+        else:
+            liquidity_str = f"${token_liquidity/1000:.2f}K"
         alert_text = (
             f"{emojis} NEW BUY {emojis}\n\n"
             f"💰 {amount_str} ${token_symbol} (≈{usd_str})\n"
@@ -711,12 +731,11 @@ async def send_buy_alerts(token_address: str, buy: dict, context: ContextTypes.D
             f"💹 Market Cap: {market_cap_str}\n"
             f"💧 Liquidity: {liquidity_str}"
         )
-        # Inline buttons: BUY + Trending, and optional links
-        keyboard = []
-        keyboard.append([
+        # Inline buttons for group alert: Buy and Trending + project links if provided
+        keyboard = [[
             InlineKeyboardButton(f"BUY ${token_symbol}", url=f"https://moonbags.io/tokens/{token_address}"),
             InlineKeyboardButton("🌕 Moonbags Trending", url=f"https://t.me/moonbagstrending")
-        ])
+        ]]
         link_buttons = []
         if website:
             link_buttons.append(InlineKeyboardButton("🌐 Website", url=website))
@@ -727,18 +746,18 @@ async def send_buy_alerts(token_address: str, buy: dict, context: ContextTypes.D
         if link_buttons:
             keyboard.append(link_buttons)
         reply_markup = InlineKeyboardMarkup(keyboard)
-        # Send alert to the group (photo if media configured, otherwise text)
+        # Send alert to the group; include media if configured
         try:
             if media_file_id:
                 await context.bot.send_photo(chat_id=group_id, photo=media_file_id, caption=alert_text,
-                                             parse_mode="Markdown", reply_markup=reply_markup)
+                                              parse_mode="Markdown", reply_markup=reply_markup)
             else:
                 await context.bot.send_message(chat_id=group_id, text=alert_text,
                                                parse_mode="Markdown", reply_markup=reply_markup)
             logger.info(f"Sent alert to group {group_id} for ${token_symbol}")
         except Exception as e:
             logger.error(f"Failed to send alert to group {group_id}: {e}")
-    # Determine if a trending channel alert is needed
+    # Determine if this buy qualifies for trending channel alert
     is_boosted = False
     with get_db() as conn:
         cur = conn.cursor()
@@ -746,7 +765,7 @@ async def send_buy_alerts(token_address: str, buy: dict, context: ContextTypes.D
         if cur.fetchone():
             is_boosted = True
     if buy['usd_value'] >= 200 or (is_boosted and buy['usd_value'] >= 20):
-        # Trending alert text (standard 🔥 emoji style)
+        # Compose trending channel alert text (always using 🔥 emoji style)
         emoji_count = max(1, min(20, int(buy['usd_value'] / 5)))
         trending_emojis = "🔥" * emoji_count
         trending_text = (
@@ -758,13 +777,13 @@ async def send_buy_alerts(token_address: str, buy: dict, context: ContextTypes.D
             f"💹 Market Cap: {market_cap_str}\n"
             f"💧 Liquidity: {liquidity_str}"
         )
-        # Inline buttons: BUY + Boost (deep-link to bot /boost command)
+        # Inline buttons for trending post: Buy link and a deep-link to boost
         trend_buttons = [[
             InlineKeyboardButton(f"BUY ${token_symbol}", url=f"https://moonbags.io/tokens/{token_address}"),
             InlineKeyboardButton("🚀 Boost This Token", url=f"https://t.me/{context.bot.username}?start=boost_{token_address}")
         ]]
         trend_markup = InlineKeyboardMarkup(trend_buttons)
-        # Use the first available media (if any) from group settings for trending post
+        # Use first available media image from any group for this token, if exists
         media_id = None
         with get_db() as conn:
             cur = conn.cursor()
@@ -783,7 +802,7 @@ async def send_buy_alerts(token_address: str, buy: dict, context: ContextTypes.D
             logger.error(f"Failed to send trending buy alert: {e}")
 
 def main():
-    # Start the health-check HTTP server in background
+    # Start the health-check HTTP server in the background
     http_thread = threading.Thread(target=start_http_server, daemon=True)
     http_thread.start()
     # Prepare initial token list for WebSocket subscription
@@ -792,14 +811,14 @@ def main():
         cur = conn.cursor()
         cur.execute("SELECT DISTINCT token_address FROM groups")
         initial_tokens = [row[0] for row in cur.fetchall()]
-    # Launch WebSocket listener thread for real-time buy events (if configured)
+    # Launch WebSocket listener thread for real-time buy events, if configured
     if buy_stream.WS_URL:
         ws_thread = threading.Thread(target=buy_stream.start_ws_thread, args=(initial_tokens,), daemon=True)
         ws_thread.start()
         logger.info("WebSocket listener thread started.")
-    # Create and configure the Telegram bot application
+    # Set up the Telegram bot application
     application = Application.builder().token(BOT_TOKEN).build()
-    # Conversation handler for /start setup flow
+    # Conversation handler for setup (/start in group -> private configuration)
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
         states={
@@ -820,19 +839,18 @@ def main():
         allow_reentry=True
     )
     application.add_handler(conv_handler)
-    application.add_handler(CallbackQueryHandler(menu_handler))  # Global menu handler fix
-    # Standalone command handlers
+    # Standalone command handlers for boosting
     application.add_handler(CommandHandler("boost", boost_command))
     application.add_handler(CallbackQueryHandler(boost_callback, pattern=r"^boost_"))
     application.add_handler(CommandHandler("confirm", confirm_boost))
-    # Schedule background jobs
+    # Schedule background jobs for processing events and updating trending leaderboard
     job_queue = application.job_queue
     if buy_stream.WS_URL:
         job_queue.run_repeating(process_ws_events, interval=1, first=5)
     else:
         job_queue.run_repeating(check_buys, interval=30, first=5)
-    job_queue.run_repeating(trend_alert, interval=300, first=60)
-    # Run the bot
+    job_queue.run_repeating(trend_alert, interval=1800, first=60)  # update trending every 30 minutes
+    # Run the bot until Ctrl-C or process termination
     application.run_polling()
 
 if __name__ == "__main__":
