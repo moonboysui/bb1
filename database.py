@@ -52,3 +52,12 @@ def init_db():
 def get_db():
     ensure_db_directory()
     return sqlite3.connect(DB_PATH)
+
+def clear_fake_symbols():
+    # This can be a stub or a real cleaner
+    # Remove tokens with missing or obviously fake addresses (optional safety)
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM groups WHERE token_address IS NULL OR token_address = ''")
+        conn.commit()
+
